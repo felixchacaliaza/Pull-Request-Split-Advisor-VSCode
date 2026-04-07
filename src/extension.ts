@@ -1,6 +1,36 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
 import { ensureCLIInstalled, runAnalysis } from "./runner";
 import { ReportPanel } from "./panel";
+
+const GENERATED_FILES = [
+  "pr-split-report.html",
+  "pr-split-plan.json",
+  ".advisor-history.json",
+];
+
+function ensureGitignore(workspaceRoot: string): void {
+  const gitignorePath = path.join(workspaceRoot, ".gitignore");
+  const current = fs.existsSync(gitignorePath)
+    ? fs.readFileSync(gitignorePath, "utf-8")
+    : "";
+
+  const existingLines = current.split("\n").map((l) => l.trim());
+  const toAdd = GENERATED_FILES.filter((f) => !existingLines.includes(f));
+
+  if (toAdd.length === 0) {
+    return;
+  }
+
+  const block =
+    (current.length && !current.endsWith("\n") ? "\n" : "") +
+    "\n# PR Split Advisor — archivos generados\n" +
+    toAdd.join("\n") +
+    "\n";
+
+  fs.appendFileSync(gitignorePath, block, "utf-8");
+}
 
 export function activate(context: vscode.ExtensionContext) {
   // Registrar el TreeView para que el icono aparezca en la Activity Bar
@@ -48,6 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
             progress.report({
               message: "Analizando cambios del working tree...",
             });
+            ensureGitignore(workspaceRoot);
             const reportPath = await runAnalysis(workspaceRoot, config);
 
             ReportPanel.createOrShow(context.extensionUri, reportPath);
