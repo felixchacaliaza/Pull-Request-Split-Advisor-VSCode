@@ -87,6 +87,8 @@ export function activate(context: vscode.ExtensionContext) {
     "prSplitAdvisor.analyze",
     () => {
       const cfg = vscode.workspace.getConfiguration("prSplitAdvisor");
+      type MetricsOverride = Record<string, { weight: number; scoring: Record<string, number | boolean>[] }>;
+      const metricsOverride = cfg.get<MetricsOverride | null>("metricsOverride", null) ?? undefined;
       runWithConfig(context.extensionUri, {
         baseBranch:             cfg.get<string>("baseBranch", "master"),
         excludeLockfiles:       cfg.get<boolean>("excludeLockfiles", true),
@@ -96,6 +98,7 @@ export function activate(context: vscode.ExtensionContext) {
         maxLinesPerCommitIdeal: cfg.get<number>("maxLinesPerCommitIdeal", 120),
         idealLinesPerPR:        cfg.get<number>("idealLinesPerPR", 99),
         targetScore:            cfg.get<number>("targetScore", 4),
+        ...(metricsOverride ? { metrics: metricsOverride } : {}),
       });
     }
   );

@@ -2,7 +2,7 @@
   "name": "pr-split-advisor-vscode",
   "displayName": "PR Split Advisor",
   "description": "Analiza tu working tree y sugiere cómo dividir tus cambios en Pull Requests revisables.",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "publisher": "FelixChacaliaza",
   "repository": {
     "type": "git",
@@ -100,6 +100,11 @@
           "type": "number",
           "default": 4,
           "description": "Score mínimo objetivo (1-5) para considerar el PR revisable."
+        },
+        "prSplitAdvisor.metricsOverride": {
+          "type": ["object", "null"],
+          "default": null,
+          "description": "Pesos y rangos de puntuación personalizados para las métricas M1.3, M1.4, M1.5 y M3.2. Configurado desde el panel lateral."
         }
       }
     }

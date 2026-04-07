@@ -9,6 +9,7 @@ export type AnalyzeConfig = {
   maxLinesPerCommitIdeal: number;
   idealLinesPerPR: number;
   targetScore: number;
+  metrics?: Record<string, { weight: number; scoring: Record<string, number | boolean>[] }>;
 };
 
 export class SettingsViewProvider implements vscode.WebviewViewProvider {
@@ -29,7 +30,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.command === "analyze") {
         const cfg = msg.config as AnalyzeConfig;
-        // Persistir los valores en las settings de VS Code
         const s = vscode.workspace.getConfiguration("prSplitAdvisor");
         s.update("baseBranch",             cfg.baseBranch,             vscode.ConfigurationTarget.Global);
         s.update("excludeLockfiles",       cfg.excludeLockfiles,       vscode.ConfigurationTarget.Global);
@@ -39,11 +39,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         s.update("maxLinesPerCommitIdeal", cfg.maxLinesPerCommitIdeal, vscode.ConfigurationTarget.Global);
         s.update("idealLinesPerPR",        cfg.idealLinesPerPR,        vscode.ConfigurationTarget.Global);
         s.update("targetScore",            cfg.targetScore,            vscode.ConfigurationTarget.Global);
+        if (cfg.metrics) {
+          s.update("metricsOverride", cfg.metrics, vscode.ConfigurationTarget.Global);
+        } else {
+          s.update("metricsOverride", undefined, vscode.ConfigurationTarget.Global);
+        }
         this._onAnalyze(cfg);
       }
     });
 
-    // Actualizar el webview si cambian las settings externamente
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("prSplitAdvisor") && this._view) {
         this._view.webview.html = this._getHtml(this._view.webview);
@@ -61,6 +65,30 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     const maxLinesPerCommit   = cfg.get<number>("maxLinesPerCommitIdeal", 120);
     const idealLinesPerPR     = cfg.get<number>("idealLinesPerPR", 99);
     const targetScore         = cfg.get<number>("targetScore", 4);
+
+    // Métricas: leer override guardado
+    type ScoringRule = Record<string, number | boolean>;
+    type MetricRaw   = { weight?: number; scoring?: ScoringRule[] };
+    type MetricsMap  = Record<string, MetricRaw>;
+    const mo = cfg.get<MetricsMap | null>("metricsOverride", null);
+
+    function getMetric(id: string, defWeight: number, defThresholds: number[]) {
+      const m = mo?.[id];
+      const weight = typeof m?.weight === "number" ? m.weight : defWeight;
+      const scoring = Array.isArray(m?.scoring) ? (m.scoring as ScoringRule[]) : null;
+      const thresholds = defThresholds.map((def, i) => {
+        const r = scoring?.[i];
+        if (!r) { return def; }
+        const v = r["lte"] ?? r["lt"] ?? r["eq"];
+        return typeof v === "number" ? v : def;
+      });
+      return { weight, thresholds };
+    }
+
+    const m13 = getMetric("M1.3", 0.20, [2, 4, 5, 7]);
+    const m14 = getMetric("M1.4", 0.25, [15, 20, 30, 40]);
+    const m15 = getMetric("M1.5", 0.25, [100, 150, 250, 350]);
+    const m32 = getMetric("M3.2", 0.30, [50, 300, 500, 1200]);
 
     return /* html */ `<!DOCTYPE html>
 <html lang="es">
@@ -106,9 +134,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     outline: none;
   }
   input[type="text"]:focus,
-  input[type="number"]:focus {
-    border-color: var(--vscode-focusBorder);
-  }
+  input[type="number"]:focus { border-color: var(--vscode-focusBorder); }
   .checkbox-row {
     display: flex;
     align-items: center;
@@ -138,9 +164,135 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     border-top: 1px solid var(--vscode-widget-border, #333);
     margin: 14px 0;
   }
+
+  /* ── Sección métricas ───────────────────────────── */
+  .metrics-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+  }
+  .metrics-title {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .metrics-btns { display: flex; gap: 4px; }
+  .btn-sec {
+    width: auto;
+    margin-top: 0;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: normal;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  .btn-sec:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
+  .btn-ghost {
+    width: auto;
+    margin-top: 0;
+    padding: 3px 7px;
+    font-size: 11px;
+    font-weight: normal;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    border: 1px solid var(--vscode-widget-border, #555);
+    border-radius: 2px;
+    cursor: pointer;
+    display: none;
+  }
+  .btn-ghost:hover { background: var(--vscode-list-hoverBackground); }
+  .metrics-desc {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.65;
+    margin: 0 0 8px;
+  }
+  #metricsCards { transition: opacity 0.15s; }
+  #metricsCards.locked {
+    opacity: 0.42;
+    pointer-events: none;
+  }
+  .mcard {
+    border: 1px solid var(--vscode-widget-border, #333);
+    border-radius: 3px;
+    padding: 6px 8px;
+    margin-bottom: 7px;
+  }
+  .mcard-top {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 5px;
+  }
+  .mid {
+    font-size: 11px;
+    font-weight: bold;
+    color: var(--vscode-textLink-foreground);
+    flex-shrink: 0;
+  }
+  .mname {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    flex: 1;
+  }
+  .mw-lbl {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    flex-shrink: 0;
+  }
+  .mw-inp {
+    width: 46px !important;
+    padding: 2px 4px !important;
+    font-size: 10px !important;
+  }
+  .msrow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 3px;
+  }
+  .mspts {
+    font-size: 10px;
+    font-weight: bold;
+    color: var(--vscode-charts-yellow, #e5c07b);
+    width: 20px;
+    flex-shrink: 0;
+  }
+  .msop {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    width: 13px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .ms-inp {
+    width: 58px !important;
+    padding: 2px 4px !important;
+    font-size: 10px !important;
+  }
+  .msunit {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    flex: 1;
+  }
+  .weight-sum-row {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    margin-bottom: 6px;
+    display: none;
+  }
+  .sum-ok  { color: var(--vscode-charts-green,  #89d185); }
+  .sum-bad { color: var(--vscode-charts-red, #f14c4c); }
 </style>
 </head>
 <body>
+
+<!-- ── Campos generales ────────────────────────────── -->
 <div class="field">
   <div class="field-header">
     <label for="baseBranch">Rama base</label>
@@ -196,10 +348,183 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     <span>Excluir archivos de lock (default: activado)</span>
   </label>
 </div>
+
+<hr>
+
+<!-- ── Métricas avanzadas ─────────────────────────── -->
+<div class="metrics-header">
+  <span class="metrics-title">Métricas avanzadas</span>
+  <div class="metrics-btns">
+    <button id="btnResetMetrics" class="btn-ghost" title="Restaurar valores por defecto">⟳ Defaults</button>
+    <button id="btnToggleMetrics" class="btn-sec">🔒 Editar</button>
+  </div>
+</div>
+<p class="metrics-desc">Pesos y rangos de puntuación de cada métrica. Los pesos deben sumar 1.0.</p>
+
+<div id="metricsCards" class="locked">
+
+  <!-- M1.3 -->
+  <div class="mcard">
+    <div class="mcard-top">
+      <span class="mid">M1.3</span>
+      <span class="mname">Commits en el PR</span>
+      <span class="mw-lbl">peso</span>
+      <input class="mw-inp" id="m13-weight" type="number" min="0.01" max="1" step="0.01" value="${m13.weight}" disabled>
+    </div>
+    <div class="msrow"><span class="mspts">5★</span><span class="msop">≤</span><input class="ms-inp" id="m13-t5" type="number" min="1" value="${m13.thresholds[0]}" disabled><span class="msunit">commits</span></div>
+    <div class="msrow"><span class="mspts">4★</span><span class="msop">≤</span><input class="ms-inp" id="m13-t4" type="number" min="1" value="${m13.thresholds[1]}" disabled></div>
+    <div class="msrow"><span class="mspts">3★</span><span class="msop">=</span><input class="ms-inp" id="m13-t3" type="number" min="1" value="${m13.thresholds[2]}" disabled></div>
+    <div class="msrow"><span class="mspts">2★</span><span class="msop">≤</span><input class="ms-inp" id="m13-t2" type="number" min="1" value="${m13.thresholds[3]}" disabled></div>
+  </div>
+
+  <!-- M1.4 -->
+  <div class="mcard">
+    <div class="mcard-top">
+      <span class="mid">M1.4</span>
+      <span class="mname">Archivos por commit</span>
+      <span class="mw-lbl">peso</span>
+      <input class="mw-inp" id="m14-weight" type="number" min="0.01" max="1" step="0.01" value="${m14.weight}" disabled>
+    </div>
+    <div class="msrow"><span class="mspts">5★</span><span class="msop">&lt;</span><input class="ms-inp" id="m14-t5" type="number" min="1" value="${m14.thresholds[0]}" disabled><span class="msunit">archivos</span></div>
+    <div class="msrow"><span class="mspts">4★</span><span class="msop">&lt;</span><input class="ms-inp" id="m14-t4" type="number" min="1" value="${m14.thresholds[1]}" disabled></div>
+    <div class="msrow"><span class="mspts">3★</span><span class="msop">&lt;</span><input class="ms-inp" id="m14-t3" type="number" min="1" value="${m14.thresholds[2]}" disabled></div>
+    <div class="msrow"><span class="mspts">2★</span><span class="msop">&lt;</span><input class="ms-inp" id="m14-t2" type="number" min="1" value="${m14.thresholds[3]}" disabled></div>
+  </div>
+
+  <!-- M1.5 -->
+  <div class="mcard">
+    <div class="mcard-top">
+      <span class="mid">M1.5</span>
+      <span class="mname">Líneas por commit</span>
+      <span class="mw-lbl">peso</span>
+      <input class="mw-inp" id="m15-weight" type="number" min="0.01" max="1" step="0.01" value="${m15.weight}" disabled>
+    </div>
+    <div class="msrow"><span class="mspts">5★</span><span class="msop">&lt;</span><input class="ms-inp" id="m15-t5" type="number" min="1" value="${m15.thresholds[0]}" disabled><span class="msunit">líneas</span></div>
+    <div class="msrow"><span class="mspts">4★</span><span class="msop">&lt;</span><input class="ms-inp" id="m15-t4" type="number" min="1" value="${m15.thresholds[1]}" disabled></div>
+    <div class="msrow"><span class="mspts">3★</span><span class="msop">&lt;</span><input class="ms-inp" id="m15-t3" type="number" min="1" value="${m15.thresholds[2]}" disabled></div>
+    <div class="msrow"><span class="mspts">2★</span><span class="msop">&lt;</span><input class="ms-inp" id="m15-t2" type="number" min="1" value="${m15.thresholds[3]}" disabled></div>
+  </div>
+
+  <!-- M3.2 -->
+  <div class="mcard">
+    <div class="mcard-top">
+      <span class="mid">M3.2</span>
+      <span class="mname">Líneas totales en PR</span>
+      <span class="mw-lbl">peso</span>
+      <input class="mw-inp" id="m32-weight" type="number" min="0.01" max="1" step="0.01" value="${m32.weight}" disabled>
+    </div>
+    <div class="msrow"><span class="mspts">5★</span><span class="msop">≤</span><input class="ms-inp" id="m32-t5" type="number" min="1" value="${m32.thresholds[0]}" disabled><span class="msunit">líneas</span></div>
+    <div class="msrow"><span class="mspts">4★</span><span class="msop">≤</span><input class="ms-inp" id="m32-t4" type="number" min="1" value="${m32.thresholds[1]}" disabled></div>
+    <div class="msrow"><span class="mspts">3★</span><span class="msop">≤</span><input class="ms-inp" id="m32-t3" type="number" min="1" value="${m32.thresholds[2]}" disabled></div>
+    <div class="msrow"><span class="mspts">2★</span><span class="msop">≤</span><input class="ms-inp" id="m32-t2" type="number" min="1" value="${m32.thresholds[3]}" disabled></div>
+  </div>
+
+</div><!-- #metricsCards -->
+
+<div id="weightSumRow" class="weight-sum-row">
+  Suma de pesos: <span id="weightSum">1.00</span>
+</div>
+
 <hr>
 <button id="btnAnalyze">⟳ Analizar cambios</button>
+
 <script>
   const vscode = acquireVsCodeApi();
+  let metricsUnlocked = false;
+
+  const cards       = document.getElementById('metricsCards');
+  const btnToggle   = document.getElementById('btnToggleMetrics');
+  const btnReset    = document.getElementById('btnResetMetrics');
+  const sumRow      = document.getElementById('weightSumRow');
+  const sumSpan     = document.getElementById('weightSum');
+
+  const DEFAULTS = {
+    'm13-weight': 0.20, 'm13-t5': 2,   'm13-t4': 4,   'm13-t3': 5,   'm13-t2': 7,
+    'm14-weight': 0.25, 'm14-t5': 15,  'm14-t4': 20,  'm14-t3': 30,  'm14-t2': 40,
+    'm15-weight': 0.25, 'm15-t5': 100, 'm15-t4': 150, 'm15-t3': 250, 'm15-t2': 350,
+    'm32-weight': 0.30, 'm32-t5': 50,  'm32-t4': 300, 'm32-t3': 500, 'm32-t2': 1200,
+  };
+
+  function n(id, fb) { return parseFloat(document.getElementById(id)?.value) || fb; }
+
+  function updateWeightSum() {
+    const sum = n('m13-weight',0.20)+n('m14-weight',0.25)+n('m15-weight',0.25)+n('m32-weight',0.30);
+    sumSpan.textContent = sum.toFixed(2);
+    const ok = Math.abs(sum - 1.0) <= 0.01;
+    sumSpan.className = ok ? 'sum-ok' : 'sum-bad';
+  }
+
+  function setMetricsState(unlocked) {
+    metricsUnlocked = unlocked;
+    cards.querySelectorAll('input').forEach(inp => inp.disabled = !unlocked);
+    cards.classList.toggle('locked', !unlocked);
+    btnToggle.textContent = unlocked ? '🔓 Bloquear' : '🔒 Editar';
+    btnReset.style.display = unlocked ? 'inline-block' : 'none';
+    sumRow.style.display   = unlocked ? 'block' : 'none';
+    if (unlocked) { updateWeightSum(); }
+  }
+
+  btnToggle.addEventListener('click', () => setMetricsState(!metricsUnlocked));
+
+  btnReset.addEventListener('click', () => {
+    for (const [id, val] of Object.entries(DEFAULTS)) {
+      const el = document.getElementById(id);
+      if (el) { el.value = val; }
+    }
+    updateWeightSum();
+  });
+
+  // Actualizar suma en vivo al editar pesos
+  ['m13-weight','m14-weight','m15-weight','m32-weight'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', updateWeightSum);
+  });
+
+  function buildMetrics() {
+    if (!metricsUnlocked) { return undefined; }
+    return {
+      "M1.3": {
+        weight: n('m13-weight', 0.20),
+        scoring: [
+          { lte: n('m13-t5',2),    points: 5 },
+          { lte: n('m13-t4',4),    points: 4 },
+          { eq:  n('m13-t3',5),    points: 3 },
+          { lte: n('m13-t2',7),    points: 2 },
+          { default: true,         points: 1 }
+        ]
+      },
+      "M1.4": {
+        weight: n('m14-weight', 0.25),
+        scoring: [
+          { lt: n('m14-t5',15),  points: 5 },
+          { lt: n('m14-t4',20),  points: 4 },
+          { lt: n('m14-t3',30),  points: 3 },
+          { lt: n('m14-t2',40),  points: 2 },
+          { default: true,       points: 1 }
+        ]
+      },
+      "M1.5": {
+        weight: n('m15-weight', 0.25),
+        scoring: [
+          { lt: n('m15-t5',100), points: 5 },
+          { lt: n('m15-t4',150), points: 4 },
+          { lt: n('m15-t3',250), points: 3 },
+          { lt: n('m15-t2',350), points: 2 },
+          { default: true,       points: 1 }
+        ]
+      },
+      "M3.2": {
+        weight: n('m32-weight', 0.30),
+        scoring: [
+          { lte: n('m32-t5',50),   points: 5 },
+          { lte: n('m32-t4',300),  points: 4 },
+          { lte: n('m32-t3',500),  points: 3 },
+          { lte: n('m32-t2',1200), points: 2 },
+          { default: true,         points: 1 }
+        ]
+      }
+    };
+  }
+
   document.getElementById('btnAnalyze').addEventListener('click', () => {
     vscode.postMessage({
       command: 'analyze',
@@ -212,9 +537,13 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         maxLinesPerCommitIdeal: parseInt(document.getElementById('maxLinesPerCommitIdeal').value) || 120,
         idealLinesPerPR:        parseInt(document.getElementById('idealLinesPerPR').value) || 99,
         targetScore:            parseInt(document.getElementById('targetScore').value) || 4,
+        metrics:                buildMetrics(),
       }
     });
   });
+
+  // Estado inicial: bloqueado
+  setMetricsState(false);
 </script>
 </body>
 </html>`;
