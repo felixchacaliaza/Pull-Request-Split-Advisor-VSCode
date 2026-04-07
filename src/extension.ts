@@ -1,7 +1,5 @@
 import * as vscode from "vscode";
-import * as fs from "fs";
-import * as path from "path";
-import { ensureCLIInstalled, runAnalysis, createDefaultConfig, CONFIG_FILENAME } from "./runner";
+import { ensureCLIInstalled, runAnalysis } from "./runner";
 import { ReportPanel } from "./panel";
 
 export function activate(context: vscode.ExtensionContext) {
@@ -29,27 +27,22 @@ export function activate(context: vscode.ExtensionContext) {
             progress.report({ message: "Verificando instalación del CLI..." });
             await ensureCLIInstalled();
 
-            const configPath = path.join(workspaceRoot, CONFIG_FILENAME);
-            if (!fs.existsSync(configPath)) {
-              const choice = await vscode.window.showWarningMessage(
-                `PR Split Advisor: No se encontró el archivo de configuración "${CONFIG_FILENAME}".`,
-                "Recrear config",
-                "Cancelar"
-              );
-              if (choice !== "Recrear config") {
-                return;
-              }
-              progress.report({ message: "Recreando archivo de configuración..." });
-              await createDefaultConfig(workspaceRoot);
-              vscode.window.showInformationMessage(
-                `PR Split Advisor: Archivo "${CONFIG_FILENAME}" recreado correctamente.`
-              );
-            }
+            const cfg = vscode.workspace.getConfiguration("prSplitAdvisor");
+            const config: Record<string, unknown> = {
+              baseBranch:              cfg.get<string>("baseBranch", "master"),
+              excludeLockfiles:        cfg.get<boolean>("excludeLockfiles", true),
+              largeFileThreshold:      cfg.get<number>("largeFileThreshold", 400),
+              mediumFileThreshold:     cfg.get<number>("mediumFileThreshold", 180),
+              maxFilesPerCommit:       cfg.get<number>("maxFilesPerCommit", 8),
+              maxLinesPerCommitIdeal:  cfg.get<number>("maxLinesPerCommitIdeal", 120),
+              idealLinesPerPR:         cfg.get<number>("idealLinesPerPR", 99),
+              targetScore:             cfg.get<number>("targetScore", 4),
+            };
 
             progress.report({
               message: "Analizando cambios del working tree...",
             });
-            const reportPath = await runAnalysis(workspaceRoot);
+            const reportPath = await runAnalysis(workspaceRoot, config);
 
             ReportPanel.createOrShow(context.extensionUri, reportPath);
           } catch (err: unknown) {

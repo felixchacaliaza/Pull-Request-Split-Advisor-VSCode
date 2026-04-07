@@ -38,6 +38,51 @@
           "group": "navigation"
         }
       ]
+    },
+    "configuration": {
+      "title": "PR Split Advisor",
+      "properties": {
+        "prSplitAdvisor.baseBranch": {
+          "type": "string",
+          "default": "master",
+          "description": "Rama base contra la que comparar los cambios del working tree."
+        },
+        "prSplitAdvisor.excludeLockfiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Excluir archivos de lock (package-lock.json, yarn.lock, etc.) del análisis."
+        },
+        "prSplitAdvisor.largeFileThreshold": {
+          "type": "number",
+          "default": 400,
+          "description": "Número de líneas a partir del cual un archivo se considera grande."
+        },
+        "prSplitAdvisor.mediumFileThreshold": {
+          "type": "number",
+          "default": 180,
+          "description": "Número de líneas a partir del cual un archivo se considera mediano."
+        },
+        "prSplitAdvisor.maxFilesPerCommit": {
+          "type": "number",
+          "default": 8,
+          "description": "Máximo de archivos recomendados por commit."
+        },
+        "prSplitAdvisor.maxLinesPerCommitIdeal": {
+          "type": "number",
+          "default": 120,
+          "description": "Máximo ideal de líneas modificadas por commit."
+        },
+        "prSplitAdvisor.idealLinesPerPR": {
+          "type": "number",
+          "default": 99,
+          "description": "Número ideal de líneas modificadas por Pull Request."
+        },
+        "prSplitAdvisor.targetScore": {
+          "type": "number",
+          "default": 4,
+          "description": "Score mínimo objetivo (1-5) para considerar el PR revisable."
+        }
+      }
     }
   },
   "scripts": {
