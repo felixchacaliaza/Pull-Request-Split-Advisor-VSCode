@@ -20,13 +20,20 @@
       {
         "command": "prSplitAdvisor.analyze",
         "title": "Analizar cambios del working tree",
-        "category": "PR Split Advisor"
+        "category": "PR Split Advisor",
+        "icon": "$(git-pull-request)"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "prSplitAdvisor.analyze"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "prSplitAdvisor.analyze",
+          "group": "navigation"
         }
       ]
     }

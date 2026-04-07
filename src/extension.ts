@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
-import { ensureCLIInstalled, runAnalysis } from "./runner";
+import * as fs from "fs";
+import * as path from "path";
+import { ensureCLIInstalled, runAnalysis, createDefaultConfig, CONFIG_FILENAME } from "./runner";
 import { ReportPanel } from "./panel";
 
 export function activate(context: vscode.ExtensionContext) {
@@ -26,6 +28,23 @@ export function activate(context: vscode.ExtensionContext) {
           try {
             progress.report({ message: "Verificando instalación del CLI..." });
             await ensureCLIInstalled();
+
+            const configPath = path.join(workspaceRoot, CONFIG_FILENAME);
+            if (!fs.existsSync(configPath)) {
+              const choice = await vscode.window.showWarningMessage(
+                `PR Split Advisor: No se encontró el archivo de configuración "${CONFIG_FILENAME}".`,
+                "Recrear config",
+                "Cancelar"
+              );
+              if (choice !== "Recrear config") {
+                return;
+              }
+              progress.report({ message: "Recreando archivo de configuración..." });
+              await createDefaultConfig(workspaceRoot);
+              vscode.window.showInformationMessage(
+                `PR Split Advisor: Archivo "${CONFIG_FILENAME}" recreado correctamente.`
+              );
+            }
 
             progress.report({
               message: "Analizando cambios del working tree...",
