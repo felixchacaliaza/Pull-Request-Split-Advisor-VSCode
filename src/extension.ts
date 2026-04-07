@@ -8,6 +8,7 @@ const GENERATED_FILES = [
   "pr-split-report.html",
   "pr-split-plan.json",
   ".advisor-history.json",
+  ".pr-split-history.json",
 ];
 
 function ensureGitignore(workspaceRoot: string): void {
