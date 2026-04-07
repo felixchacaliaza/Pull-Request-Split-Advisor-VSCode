@@ -46,7 +46,7 @@ export async function ensureCLIInstalled(): Promise<void> {
   }
 }
 
-const CONFIG_FILENAME = "pull-request-advisor.config.json";
+const CONFIG_FILENAME = "pr-split-advisor.config.json";
 
 export async function runAnalysis(cwd: string, config?: Record<string, unknown>): Promise<string> {
   const configPath = path.join(cwd, CONFIG_FILENAME);
