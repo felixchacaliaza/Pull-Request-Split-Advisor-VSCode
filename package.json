@@ -32,16 +32,11 @@
         {
           "id": "prSplitAdvisorView",
           "name": "Análisis",
-          "icon": "images/sidebar-icon.svg"
+          "icon": "images/sidebar-icon.svg",
+          "type": "webview"
         }
       ]
     },
-    "viewsWelcome": [
-      {
-        "view": "prSplitAdvisorView",
-        "contents": "Analiza los cambios del working tree y obtén sugerencias para dividir tus Pull Requests.\n\n[$(git-pull-request) Analizar cambios](command:prSplitAdvisor.analyze)"
-      }
-    ],
     "commands": [
       {
         "command": "prSplitAdvisor.analyze",
