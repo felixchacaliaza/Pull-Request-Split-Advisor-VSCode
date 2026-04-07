@@ -3,6 +3,12 @@ import { ensureCLIInstalled, runAnalysis } from "./runner";
 import { ReportPanel } from "./panel";
 
 export function activate(context: vscode.ExtensionContext) {
+  // Registrar el TreeView para que el icono aparezca en la Activity Bar
+  vscode.window.registerTreeDataProvider("prSplitAdvisorView", {
+    getTreeItem: (element: vscode.TreeItem) => element,
+    getChildren: () => [],
+  });
+
   const disposable = vscode.commands.registerCommand(
     "prSplitAdvisor.analyze",
     async () => {
