@@ -55,9 +55,13 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   }
 
+  // Extraer baseBranch para pasarlo como --base (prioridad sobre config file)
+  const baseBranch = config?.baseBranch as string | undefined;
+  const cliArgs = baseBranch ? ["--base", baseBranch] : [];
+
   try {
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn("pr-split-advisor", [], {
+      const proc = spawn("pr-split-advisor", cliArgs, {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
         shell: true,
