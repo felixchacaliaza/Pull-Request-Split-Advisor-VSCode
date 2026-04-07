@@ -2,7 +2,7 @@
   "name": "pr-split-advisor-vscode",
   "displayName": "PR Split Advisor",
   "description": "Analiza tu working tree y sugiere cómo dividir tus cambios en Pull Requests revisables.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "FelixChacaliaza",
   "repository": {
     "type": "git",
@@ -11,7 +11,9 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "icon": "images/icon.png",
   "activationEvents": [],
   "main": "./out/extension.js",
