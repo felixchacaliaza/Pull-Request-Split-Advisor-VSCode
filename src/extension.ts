@@ -10,6 +10,7 @@ const GENERATED_FILES = [
   "pr-split-plan.json",
   ".advisor-history.json",
   ".pr-split-history.json",
+  "pull-request-advisor.config.json",
 ];
 
 function ensureGitignore(workspaceRoot: string): void {
