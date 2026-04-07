@@ -46,7 +46,31 @@ export async function ensureCLIInstalled(): Promise<void> {
   }
 }
 
+async function ensureConfigFile(cwd: string): Promise<void> {
+  const configPath = path.join(cwd, "pr-split-advisor.config.json");
+  if (fs.existsSync(configPath)) {
+    return;
+  }
+
+  // El config no existe — lo genera el propio CLI al ejecutarse con --init-config
+  // que es equivalente a dejar que el postinstall lo cree.
+  // Usamos execFile para capturar cualquier error sin afectar el flujo principal.
+  await new Promise<void>((resolve) => {
+    // Obtenemos la ruta del script postinstall desde el paquete global instalado
+    const proc = spawn(
+      "node",
+      ["-e", `require(require.resolve('pull-request-split-advisor/scripts/postinstall.cjs'))`],
+      { cwd, stdio: "pipe", shell: true }
+    );
+    // Si falla (p.ej. ruta no encontrada), simplemente continuamos — el CLI usa defaults
+    proc.on("close", () => resolve());
+    proc.on("error", () => resolve());
+  });
+}
+
 export async function runAnalysis(cwd: string): Promise<string> {
+  await ensureConfigFile(cwd);
+
   await new Promise<void>((resolve, reject) => {
     const proc = spawn("pr-split-advisor", [], {
       cwd,
