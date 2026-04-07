@@ -16,11 +16,11 @@ Analiza los cambios de tu **working tree** y sugiere cómo dividir tus cambios e
 
 ### Opción 1 — Barra lateral
 
-Haz clic en el ícono de PR Split Advisor en la **Activity Bar** (barra izquierda de VS Code) y luego pulsa el botón **Analizar cambios**.
+Haz clic en el ícono de PR Split Advisor en la **Activity Bar** (barra lateral izquierda de VS Code) y luego pulsa el botón **Analizar cambios**.
 
 ### Opción 2 — Panel de Source Control
 
-En el panel de **Source Control** (`Ctrl+Shift+G`), pulsa el ícono `$(git-pull-request)` que aparece en la barra de título del panel.
+En el panel de **Source Control** (`Ctrl+Shift+G`), pulsa el ícono de pull request que aparece en la barra de título del panel.
 
 ### Opción 3 — Paleta de comandos
 
@@ -34,9 +34,9 @@ PR Split Advisor: Analizar cambios del working tree
 
 ## Configuración
 
-Todas las opciones se configuran en VS Code, sin necesidad de archivos adicionales en el proyecto.
+No se necesitan archivos de configuración en el proyecto. Todas las opciones se gestionan directamente desde VS Code.
 
-Ve a **Archivo → Preferencias → Configuración** (`Ctrl+,`) y busca **"PR Split Advisor"**, o edita `settings.json` directamente:
+Ve a **Archivo → Preferencias → Configuración** (`Ctrl+,`) y busca **"PR Split Advisor"**, o edita tu `settings.json` directamente:
 
 ```jsonc
 {
@@ -78,6 +78,19 @@ Ve a **Archivo → Preferencias → Configuración** (`Ctrl+,`) y busca **"PR Sp
 | `maxLinesPerCommitIdeal` | number | `120` | Máximo ideal de líneas por commit |
 | `idealLinesPerPR` | number | `99` | Líneas ideales por Pull Request |
 | `targetScore` | number | `4` | Score mínimo objetivo (1–5) |
+
+---
+
+## Archivos generados
+
+Al ejecutar el análisis, el CLI genera los siguientes archivos en la raíz del proyecto. La extensión los añade automáticamente al `.gitignore` para que no se versionen:
+
+| Archivo | Descripción |
+|---|---|
+| `pr-split-report.html` | Reporte visual que se abre en VS Code |
+| `pr-split-plan.json` | Plan de división exportado en JSON |
+| `.advisor-history.json` | Historial de análisis del CLI |
+| `.pr-split-history.json` | Historial alternativo generado por el CLI |
 
 ---
 
