@@ -6,6 +6,37 @@ import * as fs from "fs";
 const execFileAsync = promisify(execFile);
 
 /**
+ * Construye un entorno con PATH aumentado que incluye los directorios
+ * donde npm instala binarios globalmente. Necesario porque VS Code lanza
+ * procesos con un PATH reducido que no siempre incluye el global npm bin.
+ */
+function buildEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const extraPaths: string[] = [];
+
+  if (process.platform === "win32") {
+    // Ruta estándar de binarios globales de npm en Windows
+    const appData = process.env.APPDATA || "";
+    if (appData) { extraPaths.push(path.join(appData, "npm")); }
+    // Rutas de instalación típicas de Node.js en Windows
+    extraPaths.push("C:\\Program Files\\nodejs");
+    extraPaths.push("C:\\Program Files (x86)\\nodejs");
+  } else {
+    // macOS / Linux
+    extraPaths.push("/usr/local/bin");
+    extraPaths.push("/usr/bin");
+    // npm global con --prefix personalizado
+    const home = process.env.HOME || "";
+    if (home) { extraPaths.push(path.join(home, ".npm-global", "bin")); }
+  }
+
+  const sep = process.platform === "win32" ? ";" : ":";
+  const currentPath = process.env.PATH || "";
+  const newPath = [...extraPaths, currentPath].filter(Boolean).join(sep);
+
+  return { ...process.env, PATH: newPath, FORCE_COLOR: "0", ...extra };
+}
+
+/**
  * Determina el comando a usar para ejecutar el CLI.
  * - Si `pr-split-advisor` está instalado globalmente, lo usa directamente.
  * - Si no, usa `npx -y -p pull-request-split-advisor pr-split-advisor`
@@ -13,7 +44,7 @@ const execFileAsync = promisify(execFile);
  */
 async function resolveCLICommand(): Promise<{ cmd: string; args: string[] }> {
   try {
-    await execFileAsync("pr-split-advisor", ["--version"], { shell: true });
+    await execFileAsync("pr-split-advisor", ["--version"], { shell: true, env: buildEnv() });
     return { cmd: "pr-split-advisor", args: [] };
   } catch {
     // No está instalado globalmente — usar npx (sin permisos de admin)
@@ -25,7 +56,7 @@ export async function ensureCLIInstalled(): Promise<void> {
   // Ya no hace falta instalar nada: si no está global, npx se encarga.
   // Solo verificamos que npx esté disponible (viene con cualquier npm moderno).
   try {
-    await execFileAsync("npx", ["--version"], { shell: true });
+    await execFileAsync("npx", ["--version"], { shell: true, env: buildEnv() });
   } catch {
     throw new Error(
       "No se encontró npx ni pr-split-advisor. Instala Node.js (https://nodejs.org) o ejecuta:\n  npm install -g pull-request-split-advisor"
@@ -62,7 +93,7 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
         shell: true,
-        env: { ...process.env, FORCE_COLOR: "0" },
+        env: buildEnv(),
       });
 
       proc.stderr?.on("data", (chunk) => { stderrOutput += chunk.toString(); });
