@@ -38,30 +38,43 @@ function buildEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 
 /**
  * Determina el comando a usar para ejecutar el CLI.
- * - Si `pr-split-advisor` está instalado globalmente, lo usa directamente.
- * - Si no, usa `npx -y -p pull-request-split-advisor pr-split-advisor`
- *   que no requiere instalación global ni permisos de administrador.
+ * Orden de intentos:
+ * 1. Binario global `pr-split-advisor` (más rápido)
+ * 2. `npx`  (no requiere instalación global)
+ * 3. `npm exec` (integrado en npm, fallback universal cuando npx no está en PATH)
  */
 async function resolveCLICommand(): Promise<{ cmd: string; args: string[] }> {
+  const env = buildEnv();
+
+  // 1. Binario global instalado
   try {
-    await execFileAsync("pr-split-advisor", ["--version"], { shell: true, env: buildEnv() });
+    await execFileAsync("pr-split-advisor", ["--version"], { shell: true, env });
     return { cmd: "pr-split-advisor", args: [] };
-  } catch {
-    // No está instalado globalmente — usar npx (sin permisos de admin)
+  } catch { /* continuar */ }
+
+  // 2. npx
+  try {
+    await execFileAsync("npx", ["--version"], { shell: true, env });
     return { cmd: "npx", args: ["-y", "-p", "pull-request-split-advisor", "pr-split-advisor"] };
-  }
+  } catch { /* continuar */ }
+
+  // 3. npm exec (viene integrado en npm 7+, no requiere binario npx separado)
+  try {
+    await execFileAsync("npm", ["--version"], { shell: true, env });
+    return { cmd: "npm", args: ["exec", "--yes", "-p", "pull-request-split-advisor", "--", "pr-split-advisor"] };
+  } catch { /* continuar */ }
+
+  throw new Error(
+    "No se encontró Node.js/npm en el sistema.\n" +
+    "Instala Node.js desde https://nodejs.org y luego ejecuta:\n" +
+    "  npm install -g pull-request-split-advisor"
+  );
 }
 
 export async function ensureCLIInstalled(): Promise<void> {
-  // Ya no hace falta instalar nada: si no está global, npx se encarga.
-  // Solo verificamos que npx esté disponible (viene con cualquier npm moderno).
-  try {
-    await execFileAsync("npx", ["--version"], { shell: true, env: buildEnv() });
-  } catch {
-    throw new Error(
-      "No se encontró npx ni pr-split-advisor. Instala Node.js (https://nodejs.org) o ejecuta:\n  npm install -g pull-request-split-advisor"
-    );
-  }
+  // La detección y fallback se hacen en resolveCLICommand al momento de ejecutar.
+  // Aquí solo lanzamos el error anticipado si Node.js no está disponible en absoluto.
+  await resolveCLICommand();
 }
 
 const CONFIG_FILENAME = "pr-split-advisor.config.json";
