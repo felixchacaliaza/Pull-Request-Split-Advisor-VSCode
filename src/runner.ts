@@ -5,53 +5,30 @@ import * as fs from "fs";
 
 const execFileAsync = promisify(execFile);
 
-async function isCLIInstalled(): Promise<boolean> {
+/**
+ * Determina el comando a usar para ejecutar el CLI.
+ * - Si `pr-split-advisor` está instalado globalmente, lo usa directamente.
+ * - Si no, usa `npx -y -p pull-request-split-advisor pr-split-advisor`
+ *   que no requiere instalación global ni permisos de administrador.
+ */
+async function resolveCLICommand(): Promise<{ cmd: string; args: string[] }> {
   try {
     await execFileAsync("pr-split-advisor", ["--version"], { shell: true });
-    return true;
+    return { cmd: "pr-split-advisor", args: [] };
   } catch {
-    return false;
+    // No está instalado globalmente — usar npx (sin permisos de admin)
+    return { cmd: "npx", args: ["-y", "-p", "pull-request-split-advisor", "pr-split-advisor"] };
   }
 }
 
 export async function ensureCLIInstalled(): Promise<void> {
-  if (await isCLIInstalled()) {
-    return;
-  }
-
-  let installStderr = "";
-  await new Promise<void>((resolve, reject) => {
-    const proc = spawn(
-      "npm",
-      ["install", "-g", "pull-request-split-advisor"],
-      { stdio: "pipe", shell: true, env: { ...process.env } }
-    );
-    proc.stderr?.on("data", (chunk) => { installStderr += chunk.toString(); });
-    proc.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        const isWindows = process.platform === "win32";
-        const permissionIssue = installStderr.includes("EACCES") || installStderr.includes("EPERM") || installStderr.includes("permission");
-        let hint: string;
-        if (permissionIssue && isWindows) {
-          hint = `Sin permisos. Abre una terminal como Administrador y ejecuta:\n  npm install -g pull-request-split-advisor`;
-        } else if (permissionIssue) {
-          hint = `Sin permisos para instalar globalmente. Ejecuta en tu terminal:\n  sudo npm install -g pull-request-split-advisor`;
-        } else {
-          hint = `Instálalo manualmente en tu terminal:\n  npm install -g pull-request-split-advisor`;
-        }
-        reject(new Error(`La instalación automática falló (código ${code}).\n${hint}`));
-      }
-    });
-    proc.on("error", (err) => {
-      reject(new Error(`No se pudo ejecutar npm. Instálalo manualmente:\n  npm install -g pull-request-split-advisor\n(${err.message})`));
-    });
-  });
-
-  if (!(await isCLIInstalled())) {
+  // Ya no hace falta instalar nada: si no está global, npx se encarga.
+  // Solo verificamos que npx esté disponible (viene con cualquier npm moderno).
+  try {
+    await execFileAsync("npx", ["--version"], { shell: true });
+  } catch {
     throw new Error(
-      "No se pudo encontrar pr-split-advisor tras la instalación. Instálalo manualmente:\n  npm install -g pull-request-split-advisor"
+      "No se encontró npx ni pr-split-advisor. Instala Node.js (https://nodejs.org) o ejecuta:\n  npm install -g pull-request-split-advisor"
     );
   }
 }
@@ -75,10 +52,13 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     fs.unlinkSync(reportPath);
   }
 
+  const { cmd, args: baseArgs } = await resolveCLICommand();
+  const fullArgs = [...baseArgs, ...cliArgs];
+
   try {
     let stderrOutput = "";
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn("pr-split-advisor", cliArgs, {
+      const proc = spawn(cmd, fullArgs, {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
         shell: true,
