@@ -31,10 +31,16 @@ export async function ensureCLIInstalled(): Promise<void> {
       if (code === 0) {
         resolve();
       } else {
-        const permissionIssue = installStderr.includes("EACCES") || installStderr.includes("permission");
-        const hint = permissionIssue
-          ? `Sin permisos para instalar globalmente. Ejecuta en tu terminal:\n  sudo npm install -g pull-request-split-advisor`
-          : `Instálalo manualmente en tu terminal:\n  npm install -g pull-request-split-advisor`;
+        const isWindows = process.platform === "win32";
+        const permissionIssue = installStderr.includes("EACCES") || installStderr.includes("EPERM") || installStderr.includes("permission");
+        let hint: string;
+        if (permissionIssue && isWindows) {
+          hint = `Sin permisos. Abre una terminal como Administrador y ejecuta:\n  npm install -g pull-request-split-advisor`;
+        } else if (permissionIssue) {
+          hint = `Sin permisos para instalar globalmente. Ejecuta en tu terminal:\n  sudo npm install -g pull-request-split-advisor`;
+        } else {
+          hint = `Instálalo manualmente en tu terminal:\n  npm install -g pull-request-split-advisor`;
+        }
         reject(new Error(`La instalación automática falló (código ${code}).\n${hint}`));
       }
     });
