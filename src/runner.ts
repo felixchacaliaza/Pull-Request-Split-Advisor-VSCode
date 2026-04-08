@@ -22,7 +22,7 @@ export async function ensureCLIInstalled(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(
       "npm",
-      ["install", "-g", "pr-split-advisor"],
+      ["install", "-g", "pull-request-split-advisor"],
       { stdio: "pipe", shell: true }
     );
     proc.on("close", (code) => {
@@ -31,7 +31,7 @@ export async function ensureCLIInstalled(): Promise<void> {
       } else {
         reject(
           new Error(
-            `npm install falló con código ${code}. Instálalo manualmente: npm install -g pr-split-advisor`
+            `npm install falló con código ${code}. Instálalo manualmente: npm install -g pull-request-split-advisor`
           )
         );
       }
@@ -41,7 +41,7 @@ export async function ensureCLIInstalled(): Promise<void> {
 
   if (!(await isCLIInstalled())) {
     throw new Error(
-      "No se pudo encontrar pr-split-advisor tras la instalación. Instálalo manualmente: npm install -g pr-split-advisor"
+      "No se pudo encontrar pr-split-advisor tras la instalación. Instálalo manualmente: npm install -g pull-request-split-advisor"
     );
   }
 }
