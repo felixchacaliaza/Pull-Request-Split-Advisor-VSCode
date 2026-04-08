@@ -19,29 +19,33 @@ export async function ensureCLIInstalled(): Promise<void> {
     return;
   }
 
+  let installStderr = "";
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(
       "npm",
       ["install", "-g", "pull-request-split-advisor"],
-      { stdio: "pipe", shell: true }
+      { stdio: "pipe", shell: true, env: { ...process.env } }
     );
+    proc.stderr?.on("data", (chunk) => { installStderr += chunk.toString(); });
     proc.on("close", (code) => {
       if (code === 0) {
         resolve();
       } else {
-        reject(
-          new Error(
-            `npm install falló con código ${code}. Instálalo manualmente: npm install -g pull-request-split-advisor`
-          )
-        );
+        const permissionIssue = installStderr.includes("EACCES") || installStderr.includes("permission");
+        const hint = permissionIssue
+          ? `Sin permisos para instalar globalmente. Ejecuta en tu terminal:\n  sudo npm install -g pull-request-split-advisor`
+          : `Instálalo manualmente en tu terminal:\n  npm install -g pull-request-split-advisor`;
+        reject(new Error(`La instalación automática falló (código ${code}).\n${hint}`));
       }
     });
-    proc.on("error", reject);
+    proc.on("error", (err) => {
+      reject(new Error(`No se pudo ejecutar npm. Instálalo manualmente:\n  npm install -g pull-request-split-advisor\n(${err.message})`));
+    });
   });
 
   if (!(await isCLIInstalled())) {
     throw new Error(
-      "No se pudo encontrar pr-split-advisor tras la instalación. Instálalo manualmente: npm install -g pull-request-split-advisor"
+      "No se pudo encontrar pr-split-advisor tras la instalación. Instálalo manualmente:\n  npm install -g pull-request-split-advisor"
     );
   }
 }
