@@ -52,16 +52,16 @@ async function resolveCLICommand(): Promise<{ cmd: string; args: string[] }> {
     return { cmd: "pr-split-advisor", args: [] };
   } catch { /* continuar */ }
 
-  // 2. npx
+  // 2. npx — @latest garantiza siempre la versión más reciente
   try {
     await execFileAsync("npx", ["--version"], { shell: true, env });
-    return { cmd: "npx", args: ["-y", "-p", "pull-request-split-advisor", "pr-split-advisor"] };
+    return { cmd: "npx", args: ["-y", "-p", "pull-request-split-advisor@latest", "pr-split-advisor"] };
   } catch { /* continuar */ }
 
-  // 3. npm exec (viene integrado en npm 7+, no requiere binario npx separado)
+  // 3. npm exec — @latest garantiza siempre la versión más reciente
   try {
     await execFileAsync("npm", ["--version"], { shell: true, env });
-    return { cmd: "npm", args: ["exec", "--yes", "-p", "pull-request-split-advisor", "--", "pr-split-advisor"] };
+    return { cmd: "npm", args: ["exec", "--yes", "-p", "pull-request-split-advisor@latest", "--", "pr-split-advisor"] };
   } catch { /* continuar */ }
 
   throw new Error(
@@ -75,6 +75,19 @@ export async function ensureCLIInstalled(): Promise<void> {
   // La detección y fallback se hacen en resolveCLICommand al momento de ejecutar.
   // Aquí solo lanzamos el error anticipado si Node.js no está disponible en absoluto.
   await resolveCLICommand();
+}
+
+/**
+ * Actualiza el binario global en segundo plano (fire-and-forget).
+ * Solo aplica si el usuario tiene el binario instalado globalmente.
+ * Falla silenciosamente si no hay permisos o no está instalado globalmente.
+ */
+export function updateCLIInBackground(): void {
+  const env = buildEnv();
+  execFileAsync("npm", ["update", "-g", "pull-request-split-advisor"], {
+    shell: true,
+    env,
+  }).catch(() => { /* ignorar errores — permisos, sin red, etc. */ });
 }
 
 const CONFIG_FILENAME = "pr-split-advisor.config.json";

@@ -5,6 +5,7 @@ import {
   ensureCLIInstalled,
   runAnalysis,
   runScoreReport,
+  updateCLIInBackground,
   getGitBranch,
   getChangedFilesCount,
   getLastAnalysisInfo,
@@ -187,6 +188,9 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   provider.onReady = () => { initProviderState(); };
+
+  // Actualizar el binario global en segundo plano al activar la extensión
+  updateCLIInBackground();
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(SettingsViewProvider.viewType, provider)
