@@ -5,6 +5,7 @@ out/
 
 # PR Split Advisor — archivos generados
 pr-split-report.html
+pr-split-score.html
 pr-split-plan.json
 .advisor-history.json
 .pr-split-history.json
