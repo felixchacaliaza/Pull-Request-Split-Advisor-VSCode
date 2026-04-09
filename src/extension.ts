@@ -99,6 +99,7 @@ export function activate(context: vscode.ExtensionContext) {
           await ensureCLIInstalled();
 
           progress.report({ message: "Calculando score de la rama actual..." });
+          ensureGitignore(selectedWorkspace);
           const baseBranch = vscode.workspace
             .getConfiguration("prSplitAdvisor")
             .get<string>("baseBranch", "master");
