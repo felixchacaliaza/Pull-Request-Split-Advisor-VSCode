@@ -17,9 +17,65 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
   private _view?: vscode.WebviewView;
   private _onAnalyze: (config: AnalyzeConfig) => void;
+  private _onOpenReport: () => void;
+  private _onScoreReport: () => void;
+  private _onSelectWorkspace: (workspace: string) => void;
 
-  constructor(onAnalyze: (config: AnalyzeConfig) => void) {
+  /** Se invoca cuando la vista queda lista para recibir mensajes. */
+  public onReady?: () => void;
+
+  constructor(
+    onAnalyze: (config: AnalyzeConfig) => void,
+    onOpenReport: () => void,
+    onScoreReport: () => void,
+    onSelectWorkspace: (workspace: string) => void
+  ) {
     this._onAnalyze = onAnalyze;
+    this._onOpenReport = onOpenReport;
+    this._onScoreReport = onScoreReport;
+    this._onSelectWorkspace = onSelectWorkspace;
+  }
+
+  // ── Actualizaciones dinámicas ──────────────────────────────────────────
+
+  public updateBranch(branch: string): void {
+    this._view?.webview.postMessage({ command: "updateBranch", branch });
+  }
+
+  public updateStatus(
+    status: "idle" | "analyzing" | "done" | "error",
+    message?: string
+  ): void {
+    this._view?.webview.postMessage({ command: "updateStatus", status, message });
+  }
+
+  public updateLastAnalysis(
+    info: { score: number; date: string; branch: string } | null
+  ): void {
+    this._view?.webview.postMessage({ command: "updateLastAnalysis", info });
+  }
+
+  public notifyReportExists(exists: boolean): void {
+    this._view?.webview.postMessage({ command: "updateReportExists", exists });
+  }
+
+  public updateWorkspaces(
+    folders: Array<{ name: string; path: string }>,
+    selected: string
+  ): void {
+    this._view?.webview.postMessage({ command: "updateWorkspaces", folders, selected });
+  }
+
+  public setBadge(count: number): void {
+    if (this._view) {
+      this._view.badge =
+        count > 0
+          ? {
+              value: count,
+              tooltip: `${count} archivo${count === 1 ? "" : "s"} con cambios git`,
+            }
+          : undefined;
+    }
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -45,12 +101,29 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           s.update("metricsOverride", undefined, vscode.ConfigurationTarget.Global);
         }
         this._onAnalyze(cfg);
+      } else if (msg.command === "openReport") {
+        this._onOpenReport();
+      } else if (msg.command === "scoreReport") {
+        this._onScoreReport();
+      } else if (msg.command === "selectWorkspace") {
+        this._onSelectWorkspace(msg.workspace as string);
       }
     });
 
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("prSplitAdvisor") && this._view) {
         this._view.webview.html = this._getHtml(this._view.webview);
+        this.onReady?.();
+      }
+    });
+
+    // Notificar al exterior para que empuje el estado inicial
+    this.onReady?.();
+
+    // Re-notificar cuando la vista vuelva a ser visible
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this.onReady?.();
       }
     });
   }
@@ -288,9 +361,103 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   }
   .sum-ok  { color: var(--vscode-charts-green,  #89d185); }
   .sum-bad { color: var(--vscode-charts-red, #f14c4c); }
+
+  /* ── Elementos dinámicos de estado ──────────────────── */
+  .info-bar {
+    background: var(--vscode-badge-background, #3a3d41);
+    color: var(--vscode-badge-foreground, #fff);
+    border-radius: 3px;
+    padding: 4px 8px;
+    margin-bottom: 8px;
+    font-size: 11px;
+  }
+  .info-card {
+    border: 1px solid var(--vscode-widget-border, #333);
+    border-radius: 3px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+  }
+  .la-label {
+    font-size: 10px;
+    font-weight: bold;
+    display: block;
+    margin-bottom: 3px;
+  }
+  #laInfo strong { color: var(--vscode-charts-yellow, #e5c07b); }
+  .status-bar {
+    border-radius: 3px;
+    padding: 5px 8px;
+    font-size: 11px;
+    margin-bottom: 8px;
+  }
+  .status-analyzing {
+    background: var(--vscode-inputValidation-infoBackground, #063b49);
+    color: var(--vscode-inputValidation-infoForeground, #ccc);
+    border: 1px solid var(--vscode-inputValidation-infoBorder, #007acc);
+  }
+  .status-done {
+    background: var(--vscode-inputValidation-infoBackground, #063b49);
+    color: var(--vscode-charts-green, #89d185);
+    border: 1px solid var(--vscode-charts-green, #89d185);
+  }
+  .status-error {
+    background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+    color: var(--vscode-inputValidation-errorForeground, #ccc);
+    border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+  }
+  .error-msg {
+    color: var(--vscode-errorForeground, #f14c4c);
+    font-size: 11px;
+    padding: 4px 0;
+  }
+  select {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, transparent);
+    padding: 4px 6px;
+    border-radius: 2px;
+    font-size: var(--vscode-font-size);
+    outline: none;
+  }
+  select:focus { border-color: var(--vscode-focusBorder); }
+  .btn-open-report {
+    width: 100%;
+    margin-top: 6px;
+    padding: 5px 0;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+    border: none;
+    border-radius: 2px;
+    font-size: var(--vscode-font-size);
+    cursor: pointer;
+  }
+  .btn-open-report:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
 </style>
 </head>
 <body>
+
+<!-- ── Contexto: rama git y workspace ──────────────────── -->
+<div class="info-bar">
+  <span id="branchDisplay">🌿 …</span>
+</div>
+
+<div id="wsSelector" class="field" style="display:none">
+  <div class="field-header"><label for="wsSelect">Workspace</label></div>
+  <select id="wsSelect"></select>
+</div>
+
+<div id="lastAnalysisCard" class="info-card" style="display:none">
+  <span class="la-label">📊 Último análisis</span>
+  <div id="laInfo"></div>
+</div>
+
+<div id="statusBar" class="status-bar" style="display:none"></div>
+
+<hr>
 
 <!-- ── Campos generales ────────────────────────────── -->
 <div class="field">
@@ -425,18 +592,21 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   Suma de pesos: <span id="weightSum">1.00</span>
 </div>
 
+<div id="validationError" class="error-msg" style="display:none"></div>
 <hr>
+<button id="btnOpenReport" class="btn-open-report" style="display:none">📄 Abrir último reporte</button>
+<button id="btnScore" class="btn-open-report">📊 Ver score actual</button>
 <button id="btnAnalyze">⟳ Analizar cambios</button>
 
 <script>
   const vscode = acquireVsCodeApi();
   let metricsUnlocked = false;
 
-  const cards       = document.getElementById('metricsCards');
-  const btnToggle   = document.getElementById('btnToggleMetrics');
-  const btnReset    = document.getElementById('btnResetMetrics');
-  const sumRow      = document.getElementById('weightSumRow');
-  const sumSpan     = document.getElementById('weightSum');
+  const cards     = document.getElementById('metricsCards');
+  const btnToggle = document.getElementById('btnToggleMetrics');
+  const btnReset  = document.getElementById('btnResetMetrics');
+  const sumRow    = document.getElementById('weightSumRow');
+  const sumSpan   = document.getElementById('weightSum');
 
   const DEFAULTS = {
     'm13-weight': 0.20, 'm13-t5': 2,   'm13-t4': 4,   'm13-t3': 5,   'm13-t2': 7,
@@ -474,7 +644,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     updateWeightSum();
   });
 
-  // Actualizar suma en vivo al editar pesos
   ['m13-weight','m14-weight','m15-weight','m32-weight'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', updateWeightSum);
   });
@@ -525,24 +694,149 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
+  // ── Mensajes recibidos desde la extensión ──────────────────────────────
+  window.addEventListener('message', (event) => {
+    const msg = event.data;
+    switch (msg.command) {
+
+      case 'updateBranch': {
+        document.getElementById('branchDisplay').textContent = '🌿 ' + msg.branch;
+        break;
+      }
+
+      case 'updateStatus': {
+        const bar  = document.getElementById('statusBar');
+        const btnA = document.getElementById('btnAnalyze');
+        if (msg.status === 'idle') {
+          bar.style.display = 'none';
+          btnA.disabled = false;
+        } else if (msg.status === 'analyzing') {
+          bar.className = 'status-bar status-analyzing';
+          bar.style.display = 'block';
+          bar.textContent = '⏳ ' + (msg.message || 'Analizando cambios...');
+          btnA.disabled = true;
+        } else if (msg.status === 'done') {
+          bar.className = 'status-bar status-done';
+          bar.style.display = 'block';
+          bar.textContent = '✅ ' + (msg.message || 'Análisis completado');
+          btnA.disabled = false;
+          setTimeout(() => { bar.style.display = 'none'; }, 4000);
+        } else if (msg.status === 'error') {
+          bar.className = 'status-bar status-error';
+          bar.style.display = 'block';
+          bar.textContent = '❌ ' + (msg.message || 'Error en el análisis');
+          btnA.disabled = false;
+        }
+        break;
+      }
+
+      case 'updateLastAnalysis': {
+        const card   = document.getElementById('lastAnalysisCard');
+        const laInfo = document.getElementById('laInfo');
+        laInfo.textContent = '';
+        if (msg.info) {
+          const { score, branch, date } = msg.info;
+          const stars = Math.min(5, Math.round(score));
+          const strong = document.createElement('strong');
+          strong.textContent = score + '/5 ' + '★'.repeat(stars) + '☆'.repeat(5 - stars);
+          laInfo.append(strong, ' · ');
+          const em = document.createElement('em');
+          em.textContent = branch;
+          laInfo.append(em, ' · ' + date);
+          card.style.display = 'block';
+        } else {
+          card.style.display = 'none';
+        }
+        break;
+      }
+
+      case 'updateReportExists': {
+        document.getElementById('btnOpenReport').style.display = msg.exists ? 'block' : 'none';
+        break;
+      }
+
+      case 'updateWorkspaces': {
+        const wsSel   = document.getElementById('wsSelector');
+        const wsSelect = document.getElementById('wsSelect');
+        wsSelect.innerHTML = '';
+        (msg.folders || []).forEach(f => {
+          const opt = document.createElement('option');
+          opt.value = f.path;
+          opt.textContent = f.name;
+          if (f.path === msg.selected) { opt.selected = true; }
+          wsSelect.appendChild(opt);
+        });
+        wsSel.style.display = (msg.folders && msg.folders.length > 1) ? 'block' : 'none';
+        break;
+      }
+    }
+  });
+
+  // ── Selector de workspace ──────────────────────────────────────────────
+  document.getElementById('wsSelect').addEventListener('change', function() {
+    vscode.postMessage({ command: 'selectWorkspace', workspace: this.value });
+  });
+
+  // ── Abrir último reporte ───────────────────────────────────────────────
+  document.getElementById('btnOpenReport').addEventListener('click', () => {
+    vscode.postMessage({ command: 'openReport' });
+  });
+
+  document.getElementById('btnScore').addEventListener('click', () => {
+    vscode.postMessage({ command: 'scoreReport' });
+  });
+
+  // ── Analizar cambios (con validación) ─────────────────────────────────
   document.getElementById('btnAnalyze').addEventListener('click', () => {
+    const errDiv = document.getElementById('validationError');
+    errDiv.style.display = 'none';
+
+    const baseBranch = document.getElementById('baseBranch').value.trim();
+    const large  = parseInt(document.getElementById('largeFileThreshold').value)  || 400;
+    const medium = parseInt(document.getElementById('mediumFileThreshold').value) || 180;
+    const target = parseInt(document.getElementById('targetScore').value)         || 4;
+
+    if (!baseBranch) {
+      errDiv.textContent = 'La rama base no puede estar vacía.';
+      errDiv.style.display = 'block';
+      return;
+    }
+    if (medium >= large) {
+      errDiv.textContent = 'El umbral mediano (' + medium + ') debe ser menor que el grande (' + large + ').';
+      errDiv.style.display = 'block';
+      return;
+    }
+    if (target < 1 || target > 5) {
+      errDiv.textContent = 'El score objetivo debe estar entre 1 y 5.';
+      errDiv.style.display = 'block';
+      return;
+    }
+    if (metricsUnlocked) {
+      const wSum = n('m13-weight',0.20)+n('m14-weight',0.25)+n('m15-weight',0.25)+n('m32-weight',0.30);
+      if (Math.abs(wSum - 1.0) > 0.01) {
+        errDiv.textContent = 'Los pesos deben sumar 1.00 (actualmente ' + wSum.toFixed(2) + ').';
+        errDiv.style.display = 'block';
+        return;
+      }
+    }
+
     vscode.postMessage({
       command: 'analyze',
       config: {
-        baseBranch:             document.getElementById('baseBranch').value.trim() || 'master',
+        baseBranch,
         excludeLockfiles:       document.getElementById('excludeLockfiles').checked,
-        largeFileThreshold:     parseInt(document.getElementById('largeFileThreshold').value) || 400,
-        mediumFileThreshold:    parseInt(document.getElementById('mediumFileThreshold').value) || 180,
-        maxFilesPerCommit:      parseInt(document.getElementById('maxFilesPerCommit').value) || 8,
+        largeFileThreshold:     large,
+        mediumFileThreshold:    medium,
+        maxFilesPerCommit:      parseInt(document.getElementById('maxFilesPerCommit').value)      || 8,
         maxLinesPerCommitIdeal: parseInt(document.getElementById('maxLinesPerCommitIdeal').value) || 120,
-        idealLinesPerPR:        parseInt(document.getElementById('idealLinesPerPR').value) || 99,
-        targetScore:            parseInt(document.getElementById('targetScore').value) || 4,
+        idealLinesPerPR:        parseInt(document.getElementById('idealLinesPerPR').value)        || 99,
+        targetScore:            target,
         metrics:                buildMetrics(),
       }
     });
   });
 
-  // Estado inicial: bloqueado
+  // Estado inicial: métricas bloqueadas
   setMetricsState(false);
 </script>
 </body>

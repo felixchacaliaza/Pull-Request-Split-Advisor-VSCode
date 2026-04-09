@@ -2,7 +2,7 @@
   "name": "pr-split-advisor-vscode",
   "displayName": "PR Split Advisor",
   "description": "Analiza tu working tree y sugiere cómo dividir tus cambios en Pull Requests revisables.",
-  "version": "0.1.19",
+  "version": "0.2.0",
   "publisher": "FelixChacaliaza",
   "repository": {
     "type": "git",
@@ -43,6 +43,12 @@
         "title": "Analizar cambios del working tree",
         "category": "PR Split Advisor",
         "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "prSplitAdvisor.score",
+        "title": "Ver score actual de la rama",
+        "category": "PR Split Advisor",
+        "icon": "$(pulse)"
       }
     ],
     "menus": {
@@ -54,6 +60,10 @@
       "scm/title": [
         {
           "command": "prSplitAdvisor.analyze",
+          "group": "navigation"
+        },
+        {
+          "command": "prSplitAdvisor.score",
           "group": "navigation"
         }
       ]
@@ -105,6 +115,11 @@
           "type": ["object", "null"],
           "default": null,
           "description": "Pesos y rangos de puntuación personalizados para las métricas M1.3, M1.4, M1.5 y M3.2. Configurado desde el panel lateral."
+        },
+        "prSplitAdvisor.autoAnalyzeOnBranchChange": {
+          "type": "boolean",
+          "default": false,
+          "description": "Ejecutar el análisis automáticamente al detectar un cambio de rama git."
         }
       }
     }

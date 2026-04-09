@@ -148,3 +148,104 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     }
   }
 }
+
+/** Ejecuta `pr-split-advisor score` y devuelve la ruta del reporte HTML generado. */
+export async function runScoreReport(cwd: string, baseBranch?: string): Promise<string> {
+  const { cmd, args: baseArgs } = await resolveCLICommand();
+  const cliArgs = baseBranch ? ["score", "--base", baseBranch] : ["score"];
+  const fullArgs = [...baseArgs, ...cliArgs];
+  const scoreReportPath = path.join(cwd, "pr-split-score.html");
+
+  // Borrar reporte anterior
+  if (fs.existsSync(scoreReportPath)) {
+    fs.unlinkSync(scoreReportPath);
+  }
+
+  let stderrOutput = "";
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(cmd, fullArgs, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: true,
+      env: buildEnv(),
+    });
+
+    proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
+
+    proc.on("close", (code: number | null) => {
+      if (fs.existsSync(scoreReportPath)) {
+        resolve();
+      } else {
+        reject(new Error(
+          stderrOutput.trim() ||
+          `pr-split-advisor score terminó con código ${code}. Verifica que la rama base exista y haya cambios git.`
+        ));
+      }
+    });
+
+    proc.on("error", (err: Error) => {
+      reject(new Error(`No se pudo ejecutar pr-split-advisor score: ${err.message}`));
+    });
+  });
+
+  return scoreReportPath;
+}
+
+/** Obtiene la rama git actual del workspace. */
+export async function getGitBranch(cwd: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", ["branch", "--show-current"], {
+      cwd,
+      shell: true,
+      env: buildEnv(),
+    });
+    return stdout.trim() || "desconocida";
+  } catch {
+    return "desconocida";
+  }
+}
+
+/** Cuenta archivos con cambios git (staged + unstaged). */
+export async function getChangedFilesCount(cwd: string): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync("git", ["status", "--porcelain"], {
+      cwd,
+      shell: true,
+      env: buildEnv(),
+    });
+    return stdout.trim().split("\n").filter((l) => l.trim().length > 0).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** Lee el score del último análisis desde pr-split-plan.json. */
+export function getLastAnalysisInfo(
+  cwd: string
+): { score: number; date: string; branch: string } | null {
+  const planPath = path.join(cwd, "pr-split-plan.json");
+  if (!fs.existsSync(planPath)) {
+    return null;
+  }
+  try {
+    const plan = JSON.parse(fs.readFileSync(planPath, "utf-8")) as {
+      currentBranch?: string;
+      branches?: Array<{ score?: number }>;
+    };
+    const branches = plan.branches ?? [];
+    if (branches.length === 0) {
+      return null;
+    }
+    const score = parseFloat(
+      (branches.reduce((s, b) => s + (b.score ?? 0), 0) / branches.length).toFixed(2)
+    );
+    const stat = fs.statSync(planPath);
+    return {
+      score,
+      date:   stat.mtime.toLocaleString("es-PE"),
+      branch: plan.currentBranch || "desconocida",
+    };
+  } catch {
+    return null;
+  }
+}
