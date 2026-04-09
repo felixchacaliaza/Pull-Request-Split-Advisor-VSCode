@@ -118,15 +118,18 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     await new Promise<void>((resolve, reject) => {
       const proc = spawn(cmd, fullArgs, {
         cwd,
-        // 'ignore' para stdin: el CLI detecta que no hay TTY y omite
-        // todos los prompts interactivos (apply, config wizard, IA, etc.)
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
         shell: true,
         env: buildEnv(),
       });
 
       proc.stdout?.on("data", (chunk: Buffer) => { stdoutOutput += chunk.toString(); });
       proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
+
+      // Responder "y" a cualquier prompt de confirmación (continuar análisis)
+      // y "n" a cualquier prompt de apply. El orden cubre ambos casos.
+      proc.stdin?.write("y\nn\n");
+      proc.stdin?.end();
 
       proc.on("close", (code: number | null) => {
         const reportExists = fs.existsSync(reportPath);
@@ -176,11 +179,13 @@ export async function runScoreReport(cwd: string, baseBranch?: string): Promise<
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(cmd, fullArgs, {
       cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       shell: true,
       env: buildEnv(),
     });
 
+    proc.stdin?.write("y\nn\n");
+    proc.stdin?.end();
     proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
 
     proc.on("close", (code: number | null) => {
