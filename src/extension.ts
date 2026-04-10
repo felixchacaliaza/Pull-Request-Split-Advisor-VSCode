@@ -229,6 +229,27 @@ export function activate(context: vscode.ExtensionContext) {
           outputChannel.appendLine("");
           outputChannel.appendLine("✅ Plan aplicado correctamente.");
 
+          // Si el usuario no marcó "publicar ramas", mostrar los comandos para hacerlo manualmente
+          if (!result.pushBranches) {
+            const hasExistingBase = summary.branches.some(b => b.isExistingBaseBranch);
+            const newBranchNames = result.branchNames.length > 0
+              ? result.branchNames
+              : summary.branches.filter(b => !b.isExistingBaseBranch).map(b => b.name);
+
+            outputChannel.appendLine("");
+            outputChannel.appendLine("📋 Para publicar las ramas en remoto, copia y pega:");
+            if (hasExistingBase) {
+              outputChannel.appendLine(`   git push origin ${summary.currentBranch}`);
+            }
+            for (const name of newBranchNames) {
+              outputChannel.appendLine(`   git push origin ${name}`);
+            }
+          }
+
+          // Eliminar el plan para evitar que se aplique dos veces
+          const planPath = path.join(selectedWorkspace, "pr-split-plan.json");
+          if (fs.existsSync(planPath)) { fs.unlinkSync(planPath); }
+
           ReportPanel.createOrShow(context.extensionUri, newReportPath);
           provider.updateStatus("done", "Plan aplicado");
           provider.notifyReportExists(true);
