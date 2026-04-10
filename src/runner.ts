@@ -251,6 +251,18 @@ export async function runApplyPlan(
   const fullArgs = [...baseArgs, ...cliArgs];
   const reportPath = path.join(cwd, "pr-split-report.html");
 
+  // Contar el total de commits en el plan para preparar el stdin exacto.
+  // El CLI pide un número de subtarea por cada commit (Enter = usar el por defecto).
+  // También puede haber un prompt de cascada comprometida que espera "y".
+  // Estrategia: y\n (cascada) + \n × (totalCommits + margen) para aceptar defaults.
+  const planSummary = getPlanSummary(cwd);
+  const totalCommits = planSummary
+    ? planSummary.branches
+        .filter(b => !b.isExistingBaseBranch)
+        .reduce((sum, b) => sum + b.commitPlan.length, 0)
+    : 0;
+  const stdinInput = "y\n" + "\n".repeat(Math.max(totalCommits, 1) + 5);
+
   let stderrOutput = "";
   let stdoutOutput = "";
   let buffer = "";
@@ -275,9 +287,9 @@ export async function runApplyPlan(
     });
     proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
 
-    // Enviar varias respuestas "y" para cubrir todos los posibles prompts
-    // (cascada comprometida, confirmación apply, etc.)
-    proc.stdin?.write("y\ny\ny\n");
+    // Responder "y" para el posible prompt de cascada, luego Enter por
+    // cada prompt de subtarea (acepta el número de ticket por defecto).
+    proc.stdin?.write(stdinInput);
     proc.stdin?.end();
 
     proc.on("close", (code: number | null) => {
