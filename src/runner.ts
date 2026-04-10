@@ -250,42 +250,13 @@ export async function runApplyPlan(
   const { cmd, args: baseArgs } = await resolveCLICommand();
   const cliArgs: string[] = [];
   if (baseBranch) { cliArgs.push("--base", baseBranch); }
-  cliArgs.push("--apply");
+  cliArgs.push("--apply", "--yes");
   const fullArgs = [...baseArgs, ...cliArgs];
   const reportPath = path.join(cwd, "pr-split-report.html");
 
-  // Construir stdin para los prompts de subtarea del CLI.
-  //
-  // El CLI pide número de subtarea para TODOS los commits, incluyendo los de la
-  // rama base existente (isExistingBaseBranch). El formulario solo muestra ramas
-  // nuevas, así que:
-  //   1. \n × commits de rama base existente → acepta el default del CLI
-  //   2. valor del form (o \n) × commits de ramas nuevas + 5 de margen
-  //
-  // NO enviamos "y\n" inicial: el prompt de cascada solo aparece cuando la
-  // integridad está comprometida, y en ese caso el botón Apply está bloqueado.
-  const planSummary = getPlanSummary(cwd);
-  const existingBaseCommits = planSummary
-    ? planSummary.branches
-        .filter(b => b.isExistingBaseBranch)
-        .reduce((sum, b) => sum + b.commitPlan.length, 0)
-    : 0;
-  const newBranchCommits = planSummary
-    ? planSummary.branches
-        .filter(b => !b.isExistingBaseBranch)
-        .reduce((sum, b) => sum + b.commitPlan.length, 0)
-    : 0;
-
-  // \n por cada commit de la rama base existente (usar default del CLI)
-  const existingLines = "\n".repeat(existingBaseCommits);
-
-  // Líneas para ramas nuevas: valor del form o \n (default)
-  const newLines = Array.from({ length: Math.max(newBranchCommits, 1) + 5 }, (_, i) => {
-    const num = subtaskNumbers?.[i]?.trim() ?? "";
-    return num + "\n";
-  }).join("");
-
-  const stdinInput = existingLines + newLines;
+  // Con --yes el CLI omite todos los prompts y usa los valores del plan.
+  // No necesitamos construir stdin artificial.
+  const stdinInput = "";
 
   let stderrOutput = "";
   let stdoutOutput = "";
