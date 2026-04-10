@@ -50,15 +50,22 @@ export function activate(context: vscode.ExtensionContext) {
 
   let selectedWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   let provider!: SettingsViewProvider;
-  let lastCascadeWarning = false; // bloquea apply si la cascada está comprometida
+
+  // Clave de workspaceState para persistir el warning entre sesiones
+  function cascadeWarningKey(): string {
+    return `cascadeWarning:${selectedWorkspace}`;
+  }
+  function getCascadeWarning(): boolean {
+    return context.workspaceState.get<boolean>(cascadeWarningKey(), false);
+  }
+  function setCascadeWarning(value: boolean): void {
+    context.workspaceState.update(cascadeWarningKey(), value);
+  }
 
   // ── Helpers internos ────────────────────────────────────────────────────
 
   async function initProviderState(): Promise<void> {
     if (!selectedWorkspace) { return; }
-
-    // Resetear el warning de cascada al inicializar (cambio de workspace/rama)
-    lastCascadeWarning = false;
 
     const branch = await getGitBranch(selectedWorkspace);
     provider.updateBranch(branch);
@@ -77,7 +84,8 @@ export function activate(context: vscode.ExtensionContext) {
     const planExists = fs.existsSync(
       path.join(selectedWorkspace, "pr-split-plan.json")
     );
-    provider.notifyPlanExists(planExists);
+    // Mostrar el botón solo si hay plan Y el warning de cascada no está activo
+    provider.notifyPlanExists(planExists && !getCascadeWarning());
 
     const folders = vscode.workspace.workspaceFolders;
     if (folders && folders.length > 1) {
@@ -146,7 +154,7 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    if (lastCascadeWarning) {
+    if (getCascadeWarning()) {
       vscode.window.showErrorMessage(
         "PR Split Advisor: No se puede aplicar el plan — la integridad del plan en cascada está comprometida. " +
         "Crea la rama desde la base tal como indica el reporte y vuelve a analizar."
@@ -166,7 +174,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Ofrecer ver el plan antes de aplicar
     const pick = await vscode.window.showWarningMessage(
-      "⚡ Aplicar el plan creará ramas y commits en tu repositorio. Revisa el plan antes de continuar.",
+      "⚡ Revisar el plan antes de aplicarlo. ¿Qué deseas hacer?",
       { modal: true },
       "Ver plan",
       "Aplicar plan"
@@ -184,7 +192,18 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // pick === "Aplicar plan"
+    // pick === "Aplicar plan" — primero mostrar el HTML para que lo revise
+    if (fs.existsSync(reportPath)) {
+      ReportPanel.createOrShow(context.extensionUri, reportPath);
+    }
+
+    // Segunda confirmación antes de ejecutar
+    const confirm = await vscode.window.showWarningMessage(
+      "⚡ ¿Confirmas la aplicación del plan? Se crearán ramas y commits en tu repositorio.",
+      { modal: true },
+      "Confirmar y aplicar"
+    );
+    if (confirm !== "Confirmar y aplicar") { return; }
     provider.updateStatus("analyzing", "Aplicando plan...");
 
     await vscode.window.withProgress(
@@ -256,8 +275,8 @@ export function activate(context: vscode.ExtensionContext) {
           provider.notifyReportExists(true);
 
           // Si la cascada está comprometida el CLI bloquea --apply:
-          // ocultamos el botón y guardamos el estado.
-          lastCascadeWarning = hasCascadeWarning;
+          // ocultamos el botón y guardamos el estado persistido.
+          setCascadeWarning(hasCascadeWarning);
           const planExists = fs.existsSync(
             path.join(selectedWorkspace, "pr-split-plan.json")
           );
@@ -314,6 +333,10 @@ export function activate(context: vscode.ExtensionContext) {
     if (!selectedWorkspace) { return; }
     const branch = await getGitBranch(selectedWorkspace);
     provider.updateBranch(branch);
+
+    // Al cambiar de rama el plan anterior ya no es válido — resetear warning
+    setCascadeWarning(false);
+    provider.notifyPlanExists(false);
 
     const count = await getChangedFilesCount(selectedWorkspace);
     provider.setBadge(count);
