@@ -9,7 +9,6 @@ export type AnalyzeConfig = {
   maxLinesPerCommitIdeal: number;
   idealLinesPerPR: number;
   targetScore: number;
-  apply?: boolean;
   metrics?: Record<string, { weight: number; scoring: Record<string, number | boolean>[] }>;
 };
 
@@ -20,6 +19,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   private _onAnalyze: (config: AnalyzeConfig) => void;
   private _onOpenReport: () => void;
   private _onScoreReport: () => void;
+  private _onApplyPlan: () => void;
   private _onSelectWorkspace: (workspace: string) => void;
 
   /** Se invoca cuando la vista queda lista para recibir mensajes. */
@@ -29,11 +29,13 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     onAnalyze: (config: AnalyzeConfig) => void,
     onOpenReport: () => void,
     onScoreReport: () => void,
+    onApplyPlan: () => void,
     onSelectWorkspace: (workspace: string) => void
   ) {
     this._onAnalyze = onAnalyze;
     this._onOpenReport = onOpenReport;
     this._onScoreReport = onScoreReport;
+    this._onApplyPlan = onApplyPlan;
     this._onSelectWorkspace = onSelectWorkspace;
   }
 
@@ -58,6 +60,10 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
   public notifyReportExists(exists: boolean): void {
     this._view?.webview.postMessage({ command: "updateReportExists", exists });
+  }
+
+  public notifyPlanExists(exists: boolean): void {
+    this._view?.webview.postMessage({ command: "updatePlanExists", exists });
   }
 
   public updateWorkspaces(
@@ -106,6 +112,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         this._onOpenReport();
       } else if (msg.command === "scoreReport") {
         this._onScoreReport();
+      } else if (msg.command === "applyPlan") {
+        this._onApplyPlan();
       } else if (msg.command === "selectWorkspace") {
         this._onSelectWorkspace(msg.workspace as string);
       }
@@ -437,17 +445,19 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     cursor: pointer;
   }
   .btn-open-report:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
-  .apply-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 8px;
+  .btn-apply-plan {
+    width: 100%;
+    margin-top: 6px;
+    padding: 5px 0;
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #fff);
+    border: none;
+    border-radius: 2px;
     font-size: var(--vscode-font-size);
-    color: var(--vscode-descriptionForeground, #aaa);
+    font-weight: 600;
     cursor: pointer;
-    user-select: none;
   }
-  .apply-label input[type="checkbox"] { cursor: pointer; }
+  .btn-apply-plan:hover { background: var(--vscode-button-hoverBackground, #1177bb); }
 </style>
 </head>
 <body>
@@ -608,9 +618,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 <hr>
 <button id="btnOpenReport" class="btn-open-report" style="display:none">📄 Abrir último reporte</button>
 <button id="btnScore" class="btn-open-report">📊 Ver score actual</button>
-<label class="apply-label" title="Crea ramas y commits automáticamente según el plan generado">
-  <input type="checkbox" id="applyPlan"> Aplicar plan (crea ramas y commits)
-</label>
+<button id="btnApplyPlan" class="btn-apply-plan" style="display:none">⚡ Aplicar plan</button>
 <button id="btnAnalyze">⟳ Analizar cambios</button>
 
 <script>
@@ -770,6 +778,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case 'updatePlanExists': {
+        document.getElementById('btnApplyPlan').style.display = msg.exists ? 'block' : 'none';
+        break;
+      }
+
       case 'updateWorkspaces': {
         const wsSel   = document.getElementById('wsSelector');
         const wsSelect = document.getElementById('wsSelect');
@@ -799,6 +812,10 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
   document.getElementById('btnScore').addEventListener('click', () => {
     vscode.postMessage({ command: 'scoreReport' });
+  });
+
+  document.getElementById('btnApplyPlan').addEventListener('click', () => {
+    vscode.postMessage({ command: 'applyPlan' });
   });
 
   // ── Analizar cambios (con validación) ─────────────────────────────────
@@ -846,7 +863,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         maxLinesPerCommitIdeal: parseInt(document.getElementById('maxLinesPerCommitIdeal').value) || 120,
         idealLinesPerPR:        parseInt(document.getElementById('idealLinesPerPR').value)        || 99,
         targetScore:            target,
-        apply:                  document.getElementById('applyPlan').checked,
         metrics:                buildMetrics(),
       }
     });

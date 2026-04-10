@@ -99,12 +99,10 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   }
 
-  // Extraer baseBranch y apply para pasarlos como flags al CLI
+  // Extraer baseBranch para pasarlo como flag al CLI
   const baseBranch = config?.baseBranch as string | undefined;
-  const applyPlan  = config?.apply === true;
   const cliArgs: string[] = [];
   if (baseBranch) { cliArgs.push("--base", baseBranch); }
-  if (applyPlan)  { cliArgs.push("--apply"); }
 
   // Borrar el reporte anterior para que no se muestre si el CLI falla
   const reportPath = path.join(cwd, "pr-split-report.html");
@@ -129,10 +127,9 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
       proc.stdout?.on("data", (chunk: Buffer) => { stdoutOutput += chunk.toString(); });
       proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
 
-      // Con --apply el CLI no muestra el prompt de "¿Aplicar?" — solo
-      // necesitamos responder "y" al posible prompt de cascada comprometida.
-      // Sin --apply respondemos "y" (continuar) y "n" (no aplicar).
-      proc.stdin?.write(applyPlan ? "y\n" : "y\nn\n");
+      // Respondemos "y" al posible prompt de cascada comprometida
+      // y "n" al prompt de apply (solo análisis, sin aplicar).
+      proc.stdin?.write("y\nn\n");
       proc.stdin?.end();
 
       proc.on("close", (code: number | null) => {
@@ -165,6 +162,53 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
       fs.unlinkSync(configPath);
     }
   }
+}
+
+/**
+ * Ejecuta `pr-split-advisor --apply` para crear ramas y commits según el plan.
+ * Devuelve la ruta del reporte HTML generado.
+ */
+export async function runApplyPlan(cwd: string, baseBranch?: string): Promise<string> {
+  const { cmd, args: baseArgs } = await resolveCLICommand();
+  const cliArgs: string[] = [];
+  if (baseBranch) { cliArgs.push("--base", baseBranch); }
+  cliArgs.push("--apply");
+  const fullArgs = [...baseArgs, ...cliArgs];
+  const reportPath = path.join(cwd, "pr-split-report.html");
+
+  let stderrOutput = "";
+  let stdoutOutput = "";
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(cmd, fullArgs, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: true,
+      env: buildEnv(),
+    });
+
+    proc.stdout?.on("data", (chunk: Buffer) => { stdoutOutput += chunk.toString(); });
+    proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
+
+    // Responder "y" al posible prompt de cascada comprometida.
+    // Con --apply no hay prompt de "¿Aplicar?".
+    proc.stdin?.write("y\n");
+    proc.stdin?.end();
+
+    proc.on("close", (code: number | null) => {
+      if (code !== null && code <= 1) {
+        resolve();
+      } else {
+        const detail = stderrOutput.trim() || stdoutOutput.trim();
+        reject(new Error(detail || `pr-split-advisor --apply terminó con código ${code}.`));
+      }
+    });
+
+    proc.on("error", (err: Error) => {
+      reject(new Error(`No se pudo ejecutar pr-split-advisor --apply: ${err.message}`));
+    });
+  });
+
+  return reportPath;
 }
 
 /** Ejecuta `pr-split-advisor score` y devuelve la ruta del reporte HTML generado. */

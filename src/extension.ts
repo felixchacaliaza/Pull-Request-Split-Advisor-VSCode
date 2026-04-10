@@ -4,6 +4,7 @@ import * as path from "path";
 import {
   ensureCLIInstalled,
   runAnalysis,
+  runApplyPlan,
   runScoreReport,
   updateCLIInBackground,
   getGitBranch,
@@ -69,6 +70,11 @@ export function activate(context: vscode.ExtensionContext) {
     );
     provider.notifyReportExists(reportExists);
 
+    const planExists = fs.existsSync(
+      path.join(selectedWorkspace, "pr-split-plan.json")
+    );
+    provider.notifyPlanExists(planExists);
+
     const folders = vscode.workspace.workspaceFolders;
     if (folders && folders.length > 1) {
       provider.updateWorkspaces(
@@ -128,6 +134,82 @@ export function activate(context: vscode.ExtensionContext) {
     ReportPanel.createOrShow(context.extensionUri, reportPath);
   }
 
+  async function runApplyFlow(): Promise<void> {
+    if (!selectedWorkspace) {
+      vscode.window.showErrorMessage(
+        "PR Split Advisor: Abre un workspace con un repositorio git primero."
+      );
+      return;
+    }
+
+    const planPath   = path.join(selectedWorkspace, "pr-split-plan.json");
+    const reportPath = path.join(selectedWorkspace, "pr-split-report.html");
+
+    if (!fs.existsSync(planPath)) {
+      vscode.window.showWarningMessage(
+        "PR Split Advisor: No hay plan generado. Ejecuta el análisis primero."
+      );
+      return;
+    }
+
+    // Ofrecer ver el plan antes de aplicar
+    const pick = await vscode.window.showWarningMessage(
+      "⚡ Aplicar el plan creará ramas y commits en tu repositorio. Revisa el plan antes de continuar.",
+      { modal: true },
+      "Ver plan",
+      "Aplicar plan"
+    );
+
+    if (!pick || pick === "Ver plan") {
+      // Abrir el HTML para que lo revise; no aplicar
+      if (fs.existsSync(reportPath)) {
+        ReportPanel.createOrShow(context.extensionUri, reportPath);
+      } else {
+        vscode.window.showWarningMessage(
+          "PR Split Advisor: No se encontró el reporte HTML. Ejecuta el análisis de nuevo."
+        );
+      }
+      return;
+    }
+
+    // pick === "Aplicar plan"
+    provider.updateStatus("analyzing", "Aplicando plan...");
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "PR Split Advisor — Aplicando plan",
+        cancellable: false,
+      },
+      async (progress) => {
+        try {
+          progress.report({ message: "Verificando instalación del CLI..." });
+          await ensureCLIInstalled();
+
+          progress.report({ message: "Creando ramas y commits según el plan..." });
+          const baseBranch = vscode.workspace
+            .getConfiguration("prSplitAdvisor")
+            .get<string>("baseBranch", "master");
+          const newReportPath = await runApplyPlan(selectedWorkspace, baseBranch);
+
+          ReportPanel.createOrShow(context.extensionUri, newReportPath);
+          provider.updateStatus("done", "Plan aplicado");
+          provider.notifyReportExists(true);
+
+          const lastAnalysis = getLastAnalysisInfo(selectedWorkspace);
+          provider.updateLastAnalysis(lastAnalysis);
+
+          const count = await getChangedFilesCount(selectedWorkspace);
+          provider.setBadge(count);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          provider.updateStatus("error", msg.split("\n")[0]);
+          vscode.window.showErrorMessage(`PR Split Advisor: ${msg}`);
+        }
+      }
+    );
+  }
+
   async function runAnalysisFlow(config: AnalyzeConfig): Promise<void> {
     if (!selectedWorkspace) {
       vscode.window.showErrorMessage(
@@ -136,23 +218,12 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // Si el usuario eligió aplicar el plan, pedir confirmación explícita
-    // porque es una operación destructiva (crea ramas y commits).
-    if (config.apply) {
-      const pick = await vscode.window.showWarningMessage(
-        "⚠️ Aplicar el plan creará ramas y commits en tu repositorio. ¿Deseas continuar?",
-        { modal: true },
-        "Sí, aplicar plan"
-      );
-      if (pick !== "Sí, aplicar plan") { return; }
-    }
-
-    provider.updateStatus("analyzing", config.apply ? "Aplicando plan..." : "Analizando cambios...");
+    provider.updateStatus("analyzing", "Analizando cambios...");
 
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: config.apply ? "PR Split Advisor — Aplicando plan" : "PR Split Advisor",
+        title: "PR Split Advisor",
         cancellable: false,
       },
       async (progress) => {
@@ -171,6 +242,11 @@ export function activate(context: vscode.ExtensionContext) {
 
           provider.updateStatus("done", "Análisis completado");
           provider.notifyReportExists(true);
+
+          const planExists = fs.existsSync(
+            path.join(selectedWorkspace, "pr-split-plan.json")
+          );
+          provider.notifyPlanExists(planExists);
 
           const lastAnalysis = getLastAnalysisInfo(selectedWorkspace);
           provider.updateLastAnalysis(lastAnalysis);
@@ -192,6 +268,7 @@ export function activate(context: vscode.ExtensionContext) {
     (config) => runAnalysisFlow(config),
     () => openLastReport(),
     () => runScoreFlow(),
+    () => runApplyFlow(),
     (ws) => {
       selectedWorkspace = ws;
       initProviderState();

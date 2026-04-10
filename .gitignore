@@ -9,3 +9,6 @@ pr-split-score.html
 pr-split-plan.json
 .advisor-history.json
 .pr-split-history.json
+
+# PR Split Advisor — archivos generados
+pr-split-advisor.config.json
