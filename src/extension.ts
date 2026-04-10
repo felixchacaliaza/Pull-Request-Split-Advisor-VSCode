@@ -222,7 +222,8 @@ export function activate(context: vscode.ExtensionContext) {
               const clean = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
               if (clean) { progress.report({ message: clean.slice(0, 80) }); }
             },
-            result.subtaskNumbers
+            result.subtaskNumbers,
+            result.pushBranches
           );
 
           outputChannel.appendLine("");

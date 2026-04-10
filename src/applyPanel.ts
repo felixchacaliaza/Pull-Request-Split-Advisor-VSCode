@@ -8,6 +8,8 @@ export type ApplyFormResult = {
   branchNames: string[];
   /** Mensajes de commit editados (aplanados en orden: rama0-commit0, rama0-commit1, rama1-commit0 ...) */
   commitMessages: string[];
+  /** Si true, publicar las ramas en el remoto tras aplicar */
+  pushBranches: boolean;
 };
 
 /**
@@ -60,12 +62,13 @@ export class ApplyPanel {
     this._panel.webview.html = this._getHtml(summary, cascadeWarning);
 
     this._panel.webview.onDidReceiveMessage(
-      (msg: { command: string; subtaskNumbers?: string[]; branchNames?: string[]; commitMessages?: string[] }) => {
+      (msg: { command: string; subtaskNumbers?: string[]; branchNames?: string[]; commitMessages?: string[]; pushBranches?: boolean }) => {
         if (msg.command === "apply") {
           this._resolve({
             subtaskNumbers:  msg.subtaskNumbers  ?? [],
             branchNames:     msg.branchNames     ?? [],
             commitMessages:  msg.commitMessages  ?? [],
+            pushBranches:    msg.pushBranches    ?? false,
           });
           this._panel.dispose();
         } else if (msg.command === "cancel") {
@@ -315,6 +318,22 @@ export class ApplyPanel {
   }
   .btn-cancel:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
   .hint { font-size: 0.82em; color: var(--vscode-descriptionForeground); margin-left: auto; align-self: center; }
+  .push-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+    padding: 8px 12px;
+    background: var(--vscode-editor-inactiveSelectionBackground, #2a2d2e);
+    border: 1px solid var(--vscode-panel-border, #444);
+    border-radius: 3px;
+    font-size: 0.9em;
+    cursor: pointer;
+    user-select: none;
+  }
+  .push-option input[type=checkbox] { cursor: pointer; width: 14px; height: 14px; }
+  .push-option label { cursor: pointer; }
+  .push-option .push-hint { color: var(--vscode-descriptionForeground); font-size: 0.82em; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -329,6 +348,13 @@ export class ApplyPanel {
 
 ${warningHtml}
 ${branchesHtml}
+
+${cascadeWarning ? "" : `
+<div class="push-option">
+  <input type="checkbox" id="chkPush" />
+  <label for="chkPush">Publicar ramas en remoto tras aplicar</label>
+  <span class="push-hint">(git push para cada rama creada)</span>
+</div>`}
 
 <div class="actions">
   ${applyBtn}
@@ -358,7 +384,9 @@ ${branchesHtml}
       const commitMessages = Array.from(document.querySelectorAll('.commit-msg-input'))
         .map(inp => inp.value.trim());
 
-      vscode.postMessage({ command: 'apply', subtaskNumbers, branchNames, commitMessages });
+      const pushBranches = !!(document.getElementById('chkPush'))?.checked;
+
+      vscode.postMessage({ command: 'apply', subtaskNumbers, branchNames, commitMessages, pushBranches });
     });
   }
 </script>

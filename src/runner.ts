@@ -245,12 +245,14 @@ export async function runApplyPlan(
   cwd: string,
   baseBranch?: string,
   onLog?: (line: string) => void,
-  subtaskNumbers?: string[]
+  subtaskNumbers?: string[],
+  pushBranches?: boolean
 ): Promise<string> {
   const { cmd, args: baseArgs } = await resolveCLICommand();
   const cliArgs: string[] = [];
   if (baseBranch) { cliArgs.push("--base", baseBranch); }
   cliArgs.push("--apply", "--yes");
+  if (pushBranches) { cliArgs.push("--push"); }
   const fullArgs = [...baseArgs, ...cliArgs];
   const reportPath = path.join(cwd, "pr-split-report.html");
 
