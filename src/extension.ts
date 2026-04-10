@@ -58,6 +58,11 @@ export function activate(context: vscode.ExtensionContext) {
   const outputChannel = vscode.window.createOutputChannel("PR Split Advisor");
   context.subscriptions.push(outputChannel);
 
+  // Flag para suprimir el headWatcher mientras el apply está en ejecución.
+  // El CLI hace git checkout por cada rama creada — sin este flag el watcher
+  // dispararía múltiples veces y podría sobrescribir el reporte o el estado.
+  let isApplying = false;
+
   // Clave de workspaceState para persistir el warning entre sesiones
   function cascadeWarningKey(): string {
     return `cascadeWarning:${selectedWorkspace}`;
@@ -204,6 +209,7 @@ export function activate(context: vscode.ExtensionContext) {
           progress.report({ message: "Verificando instalación del CLI..." });
           await ensureCLIInstalled();
 
+          isApplying = true;
           progress.report({ message: "Creando ramas y commits..." });
           const baseBranch = vscode.workspace
             .getConfiguration("prSplitAdvisor")
@@ -250,6 +256,7 @@ export function activate(context: vscode.ExtensionContext) {
           const planPath = path.join(selectedWorkspace, "pr-split-plan.json");
           if (fs.existsSync(planPath)) { fs.unlinkSync(planPath); }
 
+          isApplying = false;
           ReportPanel.createOrShow(context.extensionUri, newReportPath);
           provider.updateStatus("done", "Plan aplicado");
           provider.notifyReportExists(true);
@@ -262,6 +269,7 @@ export function activate(context: vscode.ExtensionContext) {
           const count = await getChangedFilesCount(selectedWorkspace);
           provider.setBadge(count);
         } catch (err: unknown) {
+          isApplying = false;
           const msg = err instanceof Error ? err.message : String(err);
           outputChannel.appendLine("");
           outputChannel.appendLine(`❌ Error: ${msg}`);
@@ -362,6 +370,10 @@ export function activate(context: vscode.ExtensionContext) {
 
   headWatcher.onDidChange(async () => {
     if (!selectedWorkspace) { return; }
+    // Ignorar cambios de HEAD mientras el apply está en ejecución:
+    // el CLI hace git checkout por cada rama, lo que dispararía el watcher
+    // múltiples veces y podría interferir con el reporte o el estado.
+    if (isApplying) { return; }
     const branch = await getGitBranch(selectedWorkspace);
     provider.updateBranch(branch);
 
