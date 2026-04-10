@@ -229,21 +229,21 @@ export function activate(context: vscode.ExtensionContext) {
           outputChannel.appendLine("");
           outputChannel.appendLine("✅ Plan aplicado correctamente.");
 
-          // Si el usuario no marcó "publicar ramas", mostrar los comandos para hacerlo manualmente
+          // Si el usuario no marcó "publicar ramas", mostrar el comando para hacerlo manualmente
           if (!result.pushBranches) {
             const hasExistingBase = summary.branches.some(b => b.isExistingBaseBranch);
             const newBranchNames = result.branchNames.length > 0
               ? result.branchNames
               : summary.branches.filter(b => !b.isExistingBaseBranch).map(b => b.name);
 
+            const allBranches = [
+              ...(hasExistingBase ? [summary.currentBranch] : []),
+              ...newBranchNames,
+            ];
+
             outputChannel.appendLine("");
             outputChannel.appendLine("📋 Para publicar las ramas en remoto, copia y pega:");
-            if (hasExistingBase) {
-              outputChannel.appendLine(`   git push origin ${summary.currentBranch}`);
-            }
-            for (const name of newBranchNames) {
-              outputChannel.appendLine(`   git push origin ${name}`);
-            }
+            outputChannel.appendLine(`   git push origin ${allBranches.join(" ")}`);
           }
 
           // Eliminar el plan para evitar que se aplique dos veces
