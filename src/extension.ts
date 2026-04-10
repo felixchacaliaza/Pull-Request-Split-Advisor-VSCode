@@ -154,14 +154,6 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    if (getCascadeWarning()) {
-      vscode.window.showErrorMessage(
-        "PR Split Advisor: No se puede aplicar el plan — la integridad del plan en cascada está comprometida. " +
-        "Crea la rama desde la base tal como indica el reporte y vuelve a analizar."
-      );
-      return;
-    }
-
     const planPath   = path.join(selectedWorkspace, "pr-split-plan.json");
     const reportPath = path.join(selectedWorkspace, "pr-split-report.html");
 
@@ -172,7 +164,7 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // Ofrecer ver el plan antes de aplicar
+    // Primer modal: siempre accesible para que el usuario pueda ver el plan
     const pick = await vscode.window.showWarningMessage(
       "⚡ Revisar el plan antes de aplicarlo. ¿Qué deseas hacer?",
       { modal: true },
@@ -192,7 +184,20 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // pick === "Aplicar plan" — primero mostrar el HTML para que lo revise
+    // pick === "Aplicar plan" — validar cascada AHORA antes de continuar
+    if (getCascadeWarning()) {
+      vscode.window.showErrorMessage(
+        "PR Split Advisor: No se puede aplicar este plan — la integridad del plan en cascada está comprometida. " +
+        "Crea la rama desde la base tal como indica el reporte y vuelve a analizar."
+      );
+      // Abrir el HTML para que vea el detalle del problema
+      if (fs.existsSync(reportPath)) {
+        ReportPanel.createOrShow(context.extensionUri, reportPath);
+      }
+      return;
+    }
+
+    // Plan válido: mostrar el HTML y pedir segunda confirmación
     if (fs.existsSync(reportPath)) {
       ReportPanel.createOrShow(context.extensionUri, reportPath);
     }
