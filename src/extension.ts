@@ -50,11 +50,15 @@ export function activate(context: vscode.ExtensionContext) {
 
   let selectedWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   let provider!: SettingsViewProvider;
+  let lastCascadeWarning = false; // bloquea apply si la cascada está comprometida
 
   // ── Helpers internos ────────────────────────────────────────────────────
 
   async function initProviderState(): Promise<void> {
     if (!selectedWorkspace) { return; }
+
+    // Resetear el warning de cascada al inicializar (cambio de workspace/rama)
+    lastCascadeWarning = false;
 
     const branch = await getGitBranch(selectedWorkspace);
     provider.updateBranch(branch);
@@ -138,6 +142,14 @@ export function activate(context: vscode.ExtensionContext) {
     if (!selectedWorkspace) {
       vscode.window.showErrorMessage(
         "PR Split Advisor: Abre un workspace con un repositorio git primero."
+      );
+      return;
+    }
+
+    if (lastCascadeWarning) {
+      vscode.window.showErrorMessage(
+        "PR Split Advisor: No se puede aplicar el plan — la integridad del plan en cascada está comprometida. " +
+        "Crea la rama desde la base tal como indica el reporte y vuelve a analizar."
       );
       return;
     }
@@ -233,7 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
 
           progress.report({ message: "Analizando cambios del working tree..." });
           ensureGitignore(selectedWorkspace);
-          const reportPath = await runAnalysis(
+          const { reportPath, hasCascadeWarning } = await runAnalysis(
             selectedWorkspace,
             config as unknown as Record<string, unknown>
           );
@@ -243,10 +255,19 @@ export function activate(context: vscode.ExtensionContext) {
           provider.updateStatus("done", "Análisis completado");
           provider.notifyReportExists(true);
 
+          // Si la cascada está comprometida el CLI bloquea --apply:
+          // ocultamos el botón y guardamos el estado.
+          lastCascadeWarning = hasCascadeWarning;
           const planExists = fs.existsSync(
             path.join(selectedWorkspace, "pr-split-plan.json")
           );
-          provider.notifyPlanExists(planExists);
+          provider.notifyPlanExists(planExists && !hasCascadeWarning);
+          if (hasCascadeWarning) {
+            vscode.window.showWarningMessage(
+              "PR Split Advisor: La integridad del plan en cascada está comprometida. " +
+              "El plan es de solo lectura — aplica el análisis desde una rama limpia."
+            );
+          }
 
           const lastAnalysis = getLastAnalysisInfo(selectedWorkspace);
           provider.updateLastAnalysis(lastAnalysis);

@@ -92,7 +92,7 @@ export function updateCLIInBackground(): void {
 
 const CONFIG_FILENAME = "pr-split-advisor.config.json";
 
-export async function runAnalysis(cwd: string, config?: Record<string, unknown>): Promise<string> {
+export async function runAnalysis(cwd: string, config?: Record<string, unknown>): Promise<{ reportPath: string; hasCascadeWarning: boolean }> {
   const configPath = path.join(cwd, CONFIG_FILENAME);
   const configWritten = !!config;
   if (config) {
@@ -156,7 +156,8 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
       );
     }
 
-    return reportPath;
+    const hasCascadeWarning = stdoutOutput.includes("CASCADA COMPROMETIDA");
+    return { reportPath, hasCascadeWarning };
   } finally {
     if (configWritten && fs.existsSync(configPath)) {
       fs.unlinkSync(configPath);
