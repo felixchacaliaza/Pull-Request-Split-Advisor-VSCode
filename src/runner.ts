@@ -165,11 +165,85 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
   }
 }
 
+export type PlanCommit = {
+  index: number;
+  suggestedMessage: string;
+  totalLines: number;
+  files: string[];
+};
+
+export type PlanBranch = {
+  name: string;
+  commits: number;
+  lines: number;
+  files: number;
+  score: number;
+  commitPlan: PlanCommit[];
+  isExistingBaseBranch?: boolean;
+};
+
+export type PlanSummary = {
+  currentBranch: string;
+  baseBranch: string;
+  branches: PlanBranch[];
+};
+
+/** Lee pr-split-plan.json y devuelve un resumen estructurado de ramas y commits. */
+export function getPlanSummary(cwd: string): PlanSummary | null {
+  const planPath = path.join(cwd, "pr-split-plan.json");
+  if (!fs.existsSync(planPath)) { return null; }
+  try {
+    const raw = JSON.parse(fs.readFileSync(planPath, "utf-8")) as {
+      currentBranch?: string;
+      baseBranch?: string;
+      branches?: Array<{
+        name?: string;
+        commits?: number;
+        lines?: number;
+        files?: number;
+        score?: number;
+        commitPlan?: Array<{
+          index?: number;
+          suggestedMessage?: string;
+          totalLines?: number;
+          files?: string[];
+        }>;
+        isExistingBaseBranch?: boolean;
+      }>;
+    };
+    return {
+      currentBranch: raw.currentBranch ?? "desconocida",
+      baseBranch:    raw.baseBranch    ?? "main",
+      branches: (raw.branches ?? []).map((b, i) => ({
+        name:                 b.name                 ?? `PR-${i + 1}`,
+        commits:              b.commits               ?? (b.commitPlan?.length ?? 0),
+        lines:                b.lines                 ?? 0,
+        files:                b.files                 ?? 0,
+        score:                b.score                 ?? 0,
+        isExistingBaseBranch: b.isExistingBaseBranch  ?? false,
+        commitPlan: (b.commitPlan ?? []).map((c, ci) => ({
+          index:            c.index            ?? ci + 1,
+          suggestedMessage: c.suggestedMessage ?? `commit ${ci + 1}`,
+          totalLines:       c.totalLines       ?? 0,
+          files:            c.files            ?? [],
+        })),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Ejecuta `pr-split-advisor --apply` para crear ramas y commits según el plan.
  * Devuelve la ruta del reporte HTML generado.
+ * onLog: callback invocado por cada línea de output del CLI (progreso en tiempo real).
  */
-export async function runApplyPlan(cwd: string, baseBranch?: string): Promise<string> {
+export async function runApplyPlan(
+  cwd: string,
+  baseBranch?: string,
+  onLog?: (line: string) => void
+): Promise<string> {
   const { cmd, args: baseArgs } = await resolveCLICommand();
   const cliArgs: string[] = [];
   if (baseBranch) { cliArgs.push("--base", baseBranch); }
@@ -179,6 +253,7 @@ export async function runApplyPlan(cwd: string, baseBranch?: string): Promise<st
 
   let stderrOutput = "";
   let stdoutOutput = "";
+  let buffer = "";
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(cmd, fullArgs, {
       cwd,
@@ -187,12 +262,22 @@ export async function runApplyPlan(cwd: string, baseBranch?: string): Promise<st
       env: buildEnv(),
     });
 
-    proc.stdout?.on("data", (chunk: Buffer) => { stdoutOutput += chunk.toString(); });
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stdoutOutput += text;
+      // Emitir líneas completas al callback de progreso
+      if (onLog) {
+        buffer += text;
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        lines.forEach(l => { if (l.trim()) { onLog(l); } });
+      }
+    });
     proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
 
-    // Responder "y" al posible prompt de cascada comprometida.
-    // Con --apply no hay prompt de "¿Aplicar?".
-    proc.stdin?.write("y\n");
+    // Enviar varias respuestas "y" para cubrir todos los posibles prompts
+    // (cascada comprometida, confirmación apply, etc.)
+    proc.stdin?.write("y\ny\ny\n");
     proc.stdin?.end();
 
     proc.on("close", (code: number | null) => {

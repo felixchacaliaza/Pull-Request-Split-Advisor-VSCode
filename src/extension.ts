@@ -10,6 +10,7 @@ import {
   getGitBranch,
   getChangedFilesCount,
   getLastAnalysisInfo,
+  getPlanSummary,
 } from "./runner";
 import { ReportPanel } from "./panel";
 import { SettingsViewProvider, AnalyzeConfig } from "./settingsView";
@@ -50,6 +51,10 @@ export function activate(context: vscode.ExtensionContext) {
 
   let selectedWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   let provider!: SettingsViewProvider;
+
+  // Canal de salida para logs en tiempo real del CLI
+  const outputChannel = vscode.window.createOutputChannel("PR Split Advisor");
+  context.subscriptions.push(outputChannel);
 
   // Clave de workspaceState para persistir el warning entre sesiones
   function cascadeWarningKey(): string {
@@ -197,10 +202,36 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // Plan válido: mostrar el HTML y pedir segunda confirmación
+    // Plan válido: mostrar el HTML para que lo revise
     if (fs.existsSync(reportPath)) {
       ReportPanel.createOrShow(context.extensionUri, reportPath);
     }
+
+    // Mostrar resumen del plan con ramas y commits en el OutputChannel
+    const summary = getPlanSummary(selectedWorkspace);
+    outputChannel.clear();
+    outputChannel.show(true); // preservar foco en el editor
+    outputChannel.appendLine("══════════════════════════════════════════════════");
+    outputChannel.appendLine("  PR Split Advisor — Resumen del plan");
+    outputChannel.appendLine("══════════════════════════════════════════════════");
+    if (summary) {
+      outputChannel.appendLine(`  Rama actual : ${summary.currentBranch}`);
+      outputChannel.appendLine(`  Rama base   : ${summary.baseBranch}`);
+      outputChannel.appendLine(`  PRs a crear : ${summary.branches.filter(b => !b.isExistingBaseBranch).length}`);
+      outputChannel.appendLine("──────────────────────────────────────────────────");
+      for (const branch of summary.branches) {
+        if (branch.isExistingBaseBranch) { continue; }
+        outputChannel.appendLine(`  🌿 ${branch.name}  (${branch.commits} commit${branch.commits !== 1 ? "s" : ""}, ${branch.lines} líneas, score ${branch.score}/5)`);
+        for (const commit of branch.commitPlan) {
+          outputChannel.appendLine(`      ${commit.index}. ${commit.suggestedMessage}`);
+          outputChannel.appendLine(`         ${commit.files.join(", ")}  [${commit.totalLines} líneas]`);
+        }
+      }
+      outputChannel.appendLine("──────────────────────────────────────────────────");
+    } else {
+      outputChannel.appendLine("  (no se pudo leer el resumen del plan)");
+    }
+    outputChannel.appendLine("");
 
     // Segunda confirmación antes de ejecutar
     const confirm = await vscode.window.showWarningMessage(
@@ -209,7 +240,10 @@ export function activate(context: vscode.ExtensionContext) {
       "Confirmar y aplicar"
     );
     if (confirm !== "Confirmar y aplicar") { return; }
+
     provider.updateStatus("analyzing", "Aplicando plan...");
+    outputChannel.appendLine("▶ Iniciando aplicación del plan...");
+    outputChannel.appendLine("");
 
     await vscode.window.withProgress(
       {
@@ -222,15 +256,31 @@ export function activate(context: vscode.ExtensionContext) {
           progress.report({ message: "Verificando instalación del CLI..." });
           await ensureCLIInstalled();
 
-          progress.report({ message: "Creando ramas y commits según el plan..." });
+          progress.report({ message: "Creando ramas y commits..." });
           const baseBranch = vscode.workspace
             .getConfiguration("prSplitAdvisor")
             .get<string>("baseBranch", "master");
-          const newReportPath = await runApplyPlan(selectedWorkspace, baseBranch);
+
+          const newReportPath = await runApplyPlan(
+            selectedWorkspace,
+            baseBranch,
+            (line) => {
+              outputChannel.appendLine(line);
+              // Actualizar el mensaje del spinner con la línea más reciente (sin colores ANSI)
+              const clean = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
+              if (clean) { progress.report({ message: clean.slice(0, 80) }); }
+            }
+          );
+
+          outputChannel.appendLine("");
+          outputChannel.appendLine("✅ Plan aplicado correctamente.");
 
           ReportPanel.createOrShow(context.extensionUri, newReportPath);
           provider.updateStatus("done", "Plan aplicado");
           provider.notifyReportExists(true);
+          // El plan ya fue aplicado — ocultar el botón apply
+          provider.notifyPlanExists(false);
+          setCascadeWarning(false);
 
           const lastAnalysis = getLastAnalysisInfo(selectedWorkspace);
           provider.updateLastAnalysis(lastAnalysis);
@@ -239,6 +289,8 @@ export function activate(context: vscode.ExtensionContext) {
           provider.setBadge(count);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          outputChannel.appendLine("");
+          outputChannel.appendLine(`❌ Error: ${msg}`);
           provider.updateStatus("error", msg.split("\n")[0]);
           vscode.window.showErrorMessage(`PR Split Advisor: ${msg}`);
         }
