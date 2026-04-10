@@ -99,9 +99,12 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   }
 
-  // Extraer baseBranch para pasarlo como --base (prioridad sobre config file)
+  // Extraer baseBranch y apply para pasarlos como flags al CLI
   const baseBranch = config?.baseBranch as string | undefined;
-  const cliArgs = baseBranch ? ["--base", baseBranch] : [];
+  const applyPlan  = config?.apply === true;
+  const cliArgs: string[] = [];
+  if (baseBranch) { cliArgs.push("--base", baseBranch); }
+  if (applyPlan)  { cliArgs.push("--apply"); }
 
   // Borrar el reporte anterior para que no se muestre si el CLI falla
   const reportPath = path.join(cwd, "pr-split-report.html");
@@ -126,9 +129,10 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
       proc.stdout?.on("data", (chunk: Buffer) => { stdoutOutput += chunk.toString(); });
       proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
 
-      // Responder "y" a cualquier prompt de confirmación (continuar análisis)
-      // y "n" a cualquier prompt de apply. El orden cubre ambos casos.
-      proc.stdin?.write("y\nn\n");
+      // Con --apply el CLI no muestra el prompt de "¿Aplicar?" — solo
+      // necesitamos responder "y" al posible prompt de cascada comprometida.
+      // Sin --apply respondemos "y" (continuar) y "n" (no aplicar).
+      proc.stdin?.write(applyPlan ? "y\n" : "y\nn\n");
       proc.stdin?.end();
 
       proc.on("close", (code: number | null) => {

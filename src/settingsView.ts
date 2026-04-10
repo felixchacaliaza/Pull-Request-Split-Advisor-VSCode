@@ -9,6 +9,7 @@ export type AnalyzeConfig = {
   maxLinesPerCommitIdeal: number;
   idealLinesPerPR: number;
   targetScore: number;
+  apply?: boolean;
   metrics?: Record<string, { weight: number; scoring: Record<string, number | boolean>[] }>;
 };
 
@@ -436,6 +437,17 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     cursor: pointer;
   }
   .btn-open-report:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
+  .apply-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: var(--vscode-font-size);
+    color: var(--vscode-descriptionForeground, #aaa);
+    cursor: pointer;
+    user-select: none;
+  }
+  .apply-label input[type="checkbox"] { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -596,6 +608,9 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 <hr>
 <button id="btnOpenReport" class="btn-open-report" style="display:none">📄 Abrir último reporte</button>
 <button id="btnScore" class="btn-open-report">📊 Ver score actual</button>
+<label class="apply-label" title="Crea ramas y commits automáticamente según el plan generado">
+  <input type="checkbox" id="applyPlan"> Aplicar plan (crea ramas y commits)
+</label>
 <button id="btnAnalyze">⟳ Analizar cambios</button>
 
 <script>
@@ -831,6 +846,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         maxLinesPerCommitIdeal: parseInt(document.getElementById('maxLinesPerCommitIdeal').value) || 120,
         idealLinesPerPR:        parseInt(document.getElementById('idealLinesPerPR').value)        || 99,
         targetScore:            target,
+        apply:                  document.getElementById('applyPlan').checked,
         metrics:                buildMetrics(),
       }
     });

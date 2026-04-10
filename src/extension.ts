@@ -136,12 +136,23 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    provider.updateStatus("analyzing", "Analizando cambios...");
+    // Si el usuario eligió aplicar el plan, pedir confirmación explícita
+    // porque es una operación destructiva (crea ramas y commits).
+    if (config.apply) {
+      const pick = await vscode.window.showWarningMessage(
+        "⚠️ Aplicar el plan creará ramas y commits en tu repositorio. ¿Deseas continuar?",
+        { modal: true },
+        "Sí, aplicar plan"
+      );
+      if (pick !== "Sí, aplicar plan") { return; }
+    }
+
+    provider.updateStatus("analyzing", config.apply ? "Aplicando plan..." : "Analizando cambios...");
 
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: "PR Split Advisor",
+        title: config.apply ? "PR Split Advisor — Aplicando plan" : "PR Split Advisor",
         cancellable: false,
       },
       async (progress) => {
