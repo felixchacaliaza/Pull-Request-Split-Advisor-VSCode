@@ -316,6 +316,43 @@ export async function runApplyPlan(
   return reportPath;
 }
 
+/**
+ * Parchea `pr-split-plan.json` con los nombres de rama y mensajes de commit
+ * editados por el usuario en el formulario, antes de ejecutar `--apply`.
+ *
+ * branchNames: uno por rama nueva (excluye isExistingBaseBranch), en orden.
+ * commitMessages: plano, en orden rama0-commit0, rama0-commit1, rama1-commit0...
+ * Si el array está vacío o un valor es cadena vacía, se deja el valor original.
+ */
+export function patchPlanJson(
+  cwd: string,
+  branchNames: string[],
+  commitMessages: string[]
+): void {
+  const planPath = path.join(cwd, "pr-split-plan.json");
+  if (!fs.existsSync(planPath)) { return; }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw: any = JSON.parse(fs.readFileSync(planPath, "utf-8"));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const newBranches: any[] = (raw.branches ?? []).filter((b: any) => !b.isExistingBaseBranch);
+
+  let msgCursor = 0;
+  newBranches.forEach((branch, bi) => {
+    const editedName = branchNames[bi]?.trim();
+    if (editedName) { branch.name = editedName; }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (branch.commitPlan ?? []).forEach((commit: any) => {
+      const editedMsg = commitMessages[msgCursor]?.trim();
+      if (editedMsg) { commit.suggestedMessage = editedMsg; }
+      msgCursor++;
+    });
+  });
+
+  fs.writeFileSync(planPath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
+}
+
 /** Ejecuta `pr-split-advisor score` y devuelve la ruta del reporte HTML generado. */
 export async function runScoreReport(cwd: string, baseBranch?: string): Promise<string> {
   const { cmd, args: baseArgs } = await resolveCLICommand();

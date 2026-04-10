@@ -5,6 +5,7 @@ import {
   ensureCLIInstalled,
   runAnalysis,
   runApplyPlan,
+  patchPlanJson,
   runScoreReport,
   updateCLIInBackground,
   getGitBranch,
@@ -207,6 +208,11 @@ export function activate(context: vscode.ExtensionContext) {
           const baseBranch = vscode.workspace
             .getConfiguration("prSplitAdvisor")
             .get<string>("baseBranch", "master");
+
+          // Parchear el plan JSON con los nombres/mensajes editados por el usuario
+          if (result.branchNames.length > 0 || result.commitMessages.length > 0) {
+            patchPlanJson(selectedWorkspace, result.branchNames, result.commitMessages);
+          }
 
           const newReportPath = await runApplyPlan(
             selectedWorkspace,

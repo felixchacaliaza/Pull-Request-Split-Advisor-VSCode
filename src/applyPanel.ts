@@ -4,6 +4,10 @@ import type { PlanSummary } from "./runner";
 export type ApplyFormResult = {
   /** Números de subtarea en orden de aparición por commit (uno por commit) */
   subtaskNumbers: string[];
+  /** Nombres de rama editados (uno por rama nueva, en orden) */
+  branchNames: string[];
+  /** Mensajes de commit editados (aplanados en orden: rama0-commit0, rama0-commit1, rama1-commit0 ...) */
+  commitMessages: string[];
 };
 
 /**
@@ -56,9 +60,13 @@ export class ApplyPanel {
     this._panel.webview.html = this._getHtml(summary, cascadeWarning);
 
     this._panel.webview.onDidReceiveMessage(
-      (msg: { command: string; subtaskNumbers?: string[] }) => {
+      (msg: { command: string; subtaskNumbers?: string[]; branchNames?: string[]; commitMessages?: string[] }) => {
         if (msg.command === "apply") {
-          this._resolve({ subtaskNumbers: msg.subtaskNumbers ?? [] });
+          this._resolve({
+            subtaskNumbers:  msg.subtaskNumbers  ?? [],
+            branchNames:     msg.branchNames     ?? [],
+            commitMessages:  msg.commitMessages  ?? [],
+          });
           this._panel.dispose();
         } else if (msg.command === "cancel") {
           this._resolve(null);
@@ -93,7 +101,17 @@ export class ApplyPanel {
         return /* html */`
         <tr class="commit-row">
           <td class="commit-idx">${commit.index}</td>
-          <td class="commit-msg" title="${esc(commit.suggestedMessage)}">${esc(commit.suggestedMessage)}</td>
+          <td class="commit-msg-cell">
+            <input
+              class="commit-msg-input"
+              type="text"
+              data-branch="${bi}"
+              data-commit="${ci}"
+              data-field="msg"
+              value="${esc(commit.suggestedMessage)}"
+              title="${esc(commit.suggestedMessage)}"
+            />
+          </td>
           <td class="commit-files" title="${esc(filesStr)}">${esc(filesStr)}</td>
           <td class="commit-lines">${commit.totalLines}</td>
           <td class="commit-subtask">
@@ -102,6 +120,7 @@ export class ApplyPanel {
               type="text"
               data-branch="${bi}"
               data-commit="${ci}"
+              data-field="subtask"
               value="${esc(defaultNum)}"
               placeholder="default"
               maxlength="20"
@@ -114,14 +133,20 @@ export class ApplyPanel {
       <div class="branch-card">
         <div class="branch-header">
           <span class="branch-icon">🌿</span>
-          <span class="branch-name">${esc(branch.name)}</span>
+          <input
+            class="branch-name-input"
+            type="text"
+            data-branch="${bi}"
+            value="${esc(branch.name)}"
+            title="${esc(branch.name)}"
+          />
           <span class="branch-meta">${branch.commits} commit${branch.commits !== 1 ? "s" : ""} · ${branch.lines} líneas · ⭐ ${branch.score}/5</span>
         </div>
         <table class="commit-table">
           <thead>
             <tr>
               <th>#</th>
-              <th>Mensaje sugerido</th>
+              <th>Mensaje de commit</th>
               <th>Archivos</th>
               <th>Líneas</th>
               <th>Nro. subtarea</th>
@@ -191,7 +216,24 @@ export class ApplyPanel {
     border-bottom: 1px solid var(--vscode-panel-border, #444);
   }
   .branch-name { font-weight: 600; font-family: monospace; }
-  .branch-meta { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin-left: auto; }
+  .branch-name-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid transparent;
+    color: var(--vscode-foreground);
+    font-weight: 600;
+    font-family: monospace;
+    font-size: inherit;
+    padding: 1px 4px;
+    min-width: 0;
+  }
+  .branch-name-input:focus {
+    border-bottom-color: var(--vscode-focusBorder);
+    outline: none;
+    background: var(--vscode-input-background);
+  }
+  .branch-meta { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin-left: auto; white-space: nowrap; }
 
   .commit-table {
     width: 100%;
@@ -210,7 +252,23 @@ export class ApplyPanel {
   .commit-row td { padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border, #333); vertical-align: middle; }
   .commit-row:last-child td { border-bottom: none; }
   .commit-idx { width: 30px; color: var(--vscode-descriptionForeground); text-align: center; }
-  .commit-msg { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; font-size: 0.9em; }
+  .commit-msg-cell { max-width: 320px; padding: 4px 10px; }
+  .commit-msg-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid transparent;
+    color: var(--vscode-foreground);
+    font-family: monospace;
+    font-size: 0.9em;
+    padding: 1px 4px;
+  }
+  .commit-msg-input:focus {
+    border-bottom-color: var(--vscode-focusBorder);
+    outline: none;
+    background: var(--vscode-input-background);
+  }
   .commit-files { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-family: monospace; font-size: 0.85em; }
   .commit-lines { width: 60px; text-align: right; color: var(--vscode-descriptionForeground); }
   .commit-subtask { width: 110px; }
@@ -288,9 +346,19 @@ ${branchesHtml}
   const applyBtn = document.getElementById('btnApply');
   if (applyBtn && !applyBtn.disabled) {
     applyBtn.addEventListener('click', () => {
-      const inputs = Array.from(document.querySelectorAll('.subtask-input'));
-      const subtaskNumbers = inputs.map(inp => inp.value.trim());
-      vscode.postMessage({ command: 'apply', subtaskNumbers });
+      // subtaskNumbers — plano, en orden de aparición
+      const subtaskNumbers = Array.from(document.querySelectorAll('.subtask-input'))
+        .map(inp => inp.value.trim());
+
+      // branchNames — uno por rama nueva, en orden
+      const branchNames = Array.from(document.querySelectorAll('.branch-name-input'))
+        .map(inp => inp.value.trim());
+
+      // commitMessages — plano, en orden rama0-commit0, rama0-commit1, rama1-commit0...
+      const commitMessages = Array.from(document.querySelectorAll('.commit-msg-input'))
+        .map(inp => inp.value.trim());
+
+      vscode.postMessage({ command: 'apply', subtaskNumbers, branchNames, commitMessages });
     });
   }
 </script>
