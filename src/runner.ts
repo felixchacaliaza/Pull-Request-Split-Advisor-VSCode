@@ -238,11 +238,14 @@ export function getPlanSummary(cwd: string): PlanSummary | null {
  * Ejecuta `pr-split-advisor --apply` para crear ramas y commits según el plan.
  * Devuelve la ruta del reporte HTML generado.
  * onLog: callback invocado por cada línea de output del CLI (progreso en tiempo real).
+ * subtaskNumbers: números de subtarea en orden de aparición por commit.
+ *   Cadena vacía o undefined → Enter (acepta el número por defecto del CLI).
  */
 export async function runApplyPlan(
   cwd: string,
   baseBranch?: string,
-  onLog?: (line: string) => void
+  onLog?: (line: string) => void,
+  subtaskNumbers?: string[]
 ): Promise<string> {
   const { cmd, args: baseArgs } = await resolveCLICommand();
   const cliArgs: string[] = [];
@@ -251,17 +254,21 @@ export async function runApplyPlan(
   const fullArgs = [...baseArgs, ...cliArgs];
   const reportPath = path.join(cwd, "pr-split-report.html");
 
-  // Contar el total de commits en el plan para preparar el stdin exacto.
-  // El CLI pide un número de subtarea por cada commit (Enter = usar el por defecto).
-  // También puede haber un prompt de cascada comprometida que espera "y".
-  // Estrategia: y\n (cascada) + \n × (totalCommits + margen) para aceptar defaults.
+  // Construir stdin: y\n (prompt de cascada) + una línea por commit.
+  // Si subtaskNumbers tiene valores, los usamos en orden; cadena vacía = Enter (default).
+  // El margen de +5 cubre cualquier prompt extra del CLI.
   const planSummary = getPlanSummary(cwd);
   const totalCommits = planSummary
     ? planSummary.branches
         .filter(b => !b.isExistingBaseBranch)
         .reduce((sum, b) => sum + b.commitPlan.length, 0)
     : 0;
-  const stdinInput = "y\n" + "\n".repeat(Math.max(totalCommits, 1) + 5);
+
+  const commitLines = Array.from({ length: Math.max(totalCommits, 1) + 5 }, (_, i) => {
+    const num = subtaskNumbers?.[i]?.trim() ?? "";
+    return num + "\n";
+  });
+  const stdinInput = "y\n" + commitLines.join("");
 
   let stderrOutput = "";
   let stdoutOutput = "";

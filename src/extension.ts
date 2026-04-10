@@ -13,6 +13,7 @@ import {
   getPlanSummary,
 } from "./runner";
 import { ReportPanel } from "./panel";
+import { ApplyPanel } from "./applyPanel";
 import { SettingsViewProvider, AnalyzeConfig } from "./settingsView";
 
 const GENERATED_FILES = [
@@ -159,9 +160,7 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    const planPath   = path.join(selectedWorkspace, "pr-split-plan.json");
-    const reportPath = path.join(selectedWorkspace, "pr-split-report.html");
-
+    const planPath = path.join(selectedWorkspace, "pr-split-plan.json");
     if (!fs.existsSync(planPath)) {
       vscode.window.showWarningMessage(
         "PR Split Advisor: No hay plan generado. Ejecuta el análisis primero."
@@ -169,79 +168,27 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // Primer modal: siempre accesible para que el usuario pueda ver el plan
-    const pick = await vscode.window.showWarningMessage(
-      "⚡ Revisar el plan antes de aplicarlo. ¿Qué deseas hacer?",
-      { modal: true },
-      "Ver plan",
-      "Aplicar plan"
-    );
-
-    if (!pick || pick === "Ver plan") {
-      // Abrir el HTML para que lo revise; no aplicar
-      if (fs.existsSync(reportPath)) {
-        ReportPanel.createOrShow(context.extensionUri, reportPath);
-      } else {
-        vscode.window.showWarningMessage(
-          "PR Split Advisor: No se encontró el reporte HTML. Ejecuta el análisis de nuevo."
-        );
-      }
-      return;
-    }
-
-    // pick === "Aplicar plan" — validar cascada AHORA antes de continuar
-    if (getCascadeWarning()) {
-      vscode.window.showErrorMessage(
-        "PR Split Advisor: No se puede aplicar este plan — la integridad del plan en cascada está comprometida. " +
-        "Crea la rama desde la base tal como indica el reporte y vuelve a analizar."
-      );
-      // Abrir el HTML para que vea el detalle del problema
-      if (fs.existsSync(reportPath)) {
-        ReportPanel.createOrShow(context.extensionUri, reportPath);
-      }
-      return;
-    }
-
-    // Plan válido: mostrar el HTML para que lo revise
-    if (fs.existsSync(reportPath)) {
-      ReportPanel.createOrShow(context.extensionUri, reportPath);
-    }
-
-    // Mostrar resumen del plan con ramas y commits en el OutputChannel
     const summary = getPlanSummary(selectedWorkspace);
-    outputChannel.clear();
-    outputChannel.show(true); // preservar foco en el editor
-    outputChannel.appendLine("══════════════════════════════════════════════════");
-    outputChannel.appendLine("  PR Split Advisor — Resumen del plan");
-    outputChannel.appendLine("══════════════════════════════════════════════════");
-    if (summary) {
-      outputChannel.appendLine(`  Rama actual : ${summary.currentBranch}`);
-      outputChannel.appendLine(`  Rama base   : ${summary.baseBranch}`);
-      outputChannel.appendLine(`  PRs a crear : ${summary.branches.filter(b => !b.isExistingBaseBranch).length}`);
-      outputChannel.appendLine("──────────────────────────────────────────────────");
-      for (const branch of summary.branches) {
-        if (branch.isExistingBaseBranch) { continue; }
-        outputChannel.appendLine(`  🌿 ${branch.name}  (${branch.commits} commit${branch.commits !== 1 ? "s" : ""}, ${branch.lines} líneas, score ${branch.score}/5)`);
-        for (const commit of branch.commitPlan) {
-          outputChannel.appendLine(`      ${commit.index}. ${commit.suggestedMessage}`);
-          outputChannel.appendLine(`         ${commit.files.join(", ")}  [${commit.totalLines} líneas]`);
-        }
-      }
-      outputChannel.appendLine("──────────────────────────────────────────────────");
-    } else {
-      outputChannel.appendLine("  (no se pudo leer el resumen del plan)");
+    if (!summary) {
+      vscode.window.showErrorMessage(
+        "PR Split Advisor: No se pudo leer el plan. Ejecuta el análisis de nuevo."
+      );
+      return;
     }
-    outputChannel.appendLine("");
 
-    // Segunda confirmación antes de ejecutar
-    const confirm = await vscode.window.showWarningMessage(
-      "⚡ ¿Confirmas la aplicación del plan? Se crearán ramas y commits en tu repositorio.",
-      { modal: true },
-      "Confirmar y aplicar"
+    // Abrir el formulario webview — espera a que el usuario confirme o cancele
+    const result = await ApplyPanel.show(
+      context.extensionUri,
+      summary,
+      getCascadeWarning()
     );
-    if (confirm !== "Confirmar y aplicar") { return; }
 
+    if (!result) { return; } // canceló
+
+    // Ejecutar el CLI con los números de subtarea del formulario
     provider.updateStatus("analyzing", "Aplicando plan...");
+    outputChannel.clear();
+    outputChannel.show(true);
     outputChannel.appendLine("▶ Iniciando aplicación del plan...");
     outputChannel.appendLine("");
 
@@ -266,10 +213,10 @@ export function activate(context: vscode.ExtensionContext) {
             baseBranch,
             (line) => {
               outputChannel.appendLine(line);
-              // Actualizar el mensaje del spinner con la línea más reciente (sin colores ANSI)
               const clean = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
               if (clean) { progress.report({ message: clean.slice(0, 80) }); }
-            }
+            },
+            result.subtaskNumbers
           );
 
           outputChannel.appendLine("");
@@ -278,7 +225,6 @@ export function activate(context: vscode.ExtensionContext) {
           ReportPanel.createOrShow(context.extensionUri, newReportPath);
           provider.updateStatus("done", "Plan aplicado");
           provider.notifyReportExists(true);
-          // El plan ya fue aplicado — ocultar el botón apply
           provider.notifyPlanExists(false);
           setCascadeWarning(false);
 
