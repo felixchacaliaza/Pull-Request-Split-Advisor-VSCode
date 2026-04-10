@@ -18,11 +18,11 @@ import { ApplyPanel } from "./applyPanel";
 import { SettingsViewProvider, AnalyzeConfig } from "./settingsView";
 
 const GENERATED_FILES = [
-  "pr-split-report.html",
-  "pr-split-score.html",
-  "pr-split-plan.json",
+  ".pr-split-advisor/pr-split-report.html",
+  ".pr-split-advisor/pr-split-score.html",
+  ".pr-split-advisor/pr-split-plan.json",
+  ".pr-split-advisor/.pr-split-history.json",
   ".advisor-history.json",
-  ".pr-split-history.json",
   "pr-split-advisor.config.json",
 ];
 
@@ -89,12 +89,12 @@ export function activate(context: vscode.ExtensionContext) {
     provider.updateLastAnalysis(lastAnalysis);
 
     const reportExists = fs.existsSync(
-      path.join(selectedWorkspace, "pr-split-report.html")
+      path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-report.html")
     );
     provider.notifyReportExists(reportExists);
 
     const planExists = fs.existsSync(
-      path.join(selectedWorkspace, "pr-split-plan.json")
+      path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-plan.json")
     );
     // Mostrar el botón solo si hay plan Y el warning de cascada no está activo
     provider.notifyPlanExists(planExists && !getCascadeWarning());
@@ -148,7 +148,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   function openLastReport(): void {
-    const reportPath = path.join(selectedWorkspace, "pr-split-report.html");
+    const reportPath = path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-report.html");
     if (!fs.existsSync(reportPath)) {
       vscode.window.showWarningMessage(
         "PR Split Advisor: No hay reporte disponible. Ejecuta el análisis primero."
@@ -166,7 +166,7 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    const planPath = path.join(selectedWorkspace, "pr-split-plan.json");
+    const planPath = path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-plan.json");
     if (!fs.existsSync(planPath)) {
       vscode.window.showWarningMessage(
         "PR Split Advisor: No hay plan generado. Ejecuta el análisis primero."
@@ -253,7 +253,7 @@ export function activate(context: vscode.ExtensionContext) {
           }
 
           // Eliminar el plan para evitar que se aplique dos veces
-          const planPath = path.join(selectedWorkspace, "pr-split-plan.json");
+          const planPath = path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-plan.json");
           if (fs.existsSync(planPath)) { fs.unlinkSync(planPath); }
 
           isApplying = false;
@@ -317,7 +317,7 @@ export function activate(context: vscode.ExtensionContext) {
           // ocultamos el botón y guardamos el estado persistido.
           setCascadeWarning(hasCascadeWarning);
           const planExists = fs.existsSync(
-            path.join(selectedWorkspace, "pr-split-plan.json")
+            path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-plan.json")
           );
           provider.notifyPlanExists(planExists && !hasCascadeWarning);
           if (hasCascadeWarning) {
@@ -400,6 +400,7 @@ export function activate(context: vscode.ExtensionContext) {
         maxLinesPerCommitIdeal: cfg.get<number>("maxLinesPerCommitIdeal", 120),
         idealLinesPerPR:        cfg.get<number>("idealLinesPerPR", 99),
         targetScore:            cfg.get<number>("targetScore", 4),
+        useAi:                  false,
         ...(metricsOverride ? { metrics: metricsOverride } : {}),
       });
     }
@@ -426,6 +427,7 @@ export function activate(context: vscode.ExtensionContext) {
         maxLinesPerCommitIdeal: cfg.get<number>("maxLinesPerCommitIdeal", 120),
         idealLinesPerPR:        cfg.get<number>("idealLinesPerPR", 99),
         targetScore:            cfg.get<number>("targetScore", 4),
+        useAi:                  false,
         ...(metricsOverride ? { metrics: metricsOverride } : {}),
       });
     })

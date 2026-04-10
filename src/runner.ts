@@ -91,6 +91,7 @@ export function updateCLIInBackground(): void {
 }
 
 const CONFIG_FILENAME = "pr-split-advisor.config.json";
+const OUTPUT_DIR     = ".pr-split-advisor";
 
 export async function runAnalysis(cwd: string, config?: Record<string, unknown>): Promise<{ reportPath: string; hasCascadeWarning: boolean }> {
   const configPath = path.join(cwd, CONFIG_FILENAME);
@@ -99,13 +100,19 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   }
 
-  // Extraer baseBranch para pasarlo como flag al CLI
+  // Extraer baseBranch y useAi para pasarlos como flags al CLI
   const baseBranch = config?.baseBranch as string | undefined;
   const cliArgs: string[] = [];
   if (baseBranch) { cliArgs.push("--base", baseBranch); }
 
+  // Si useAi está activo, inyectarlo en el config JSON que escribe la extensión.
+  // El CLI leerá ai.provider = "copilot" desde pr-split-advisor.config.json.
+  if (config && (config.useAi as boolean)) {
+    (config as Record<string, unknown>).ai = { enabled: true, provider: "copilot" };
+  }
+
   // Borrar el reporte anterior para que no se muestre si el CLI falla
-  const reportPath = path.join(cwd, "pr-split-report.html");
+  const reportPath = path.join(cwd, OUTPUT_DIR, "pr-split-report.html");
   if (fs.existsSync(reportPath)) {
     fs.unlinkSync(reportPath);
   }
@@ -152,11 +159,19 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
 
     if (!fs.existsSync(reportPath)) {
       throw new Error(
-        "No se generó pr-split-report.html. Verifica que la rama base exista en el remote y haya cambios git pendientes."
+        "No se generó .pr-split-advisor/pr-split-report.html. Verifica que la rama base exista en el remote y haya cambios git pendientes."
       );
     }
 
-    const hasCascadeWarning = stdoutOutput.includes("CASCADA COMPROMETIDA");
+    // Leer cascadeBlocked desde el JSON del plan (más fiable que parsear stdout)
+    let hasCascadeWarning = false;
+    const planPath = path.join(cwd, OUTPUT_DIR, "pr-split-plan.json");
+    if (fs.existsSync(planPath)) {
+      try {
+        const plan = JSON.parse(fs.readFileSync(planPath, "utf-8")) as { cascadeBlocked?: boolean };
+        hasCascadeWarning = plan.cascadeBlocked === true;
+      } catch { /* si falla la lectura, queda false */ }
+    }
     return { reportPath, hasCascadeWarning };
   } finally {
     if (configWritten && fs.existsSync(configPath)) {
@@ -190,7 +205,7 @@ export type PlanSummary = {
 
 /** Lee pr-split-plan.json y devuelve un resumen estructurado de ramas y commits. */
 export function getPlanSummary(cwd: string): PlanSummary | null {
-  const planPath = path.join(cwd, "pr-split-plan.json");
+  const planPath = path.join(cwd, OUTPUT_DIR, "pr-split-plan.json");
   if (!fs.existsSync(planPath)) { return null; }
   try {
     const raw = JSON.parse(fs.readFileSync(planPath, "utf-8")) as {
@@ -254,7 +269,7 @@ export async function runApplyPlan(
   cliArgs.push("--apply", "--yes");
   if (pushBranches) { cliArgs.push("--push"); }
   const fullArgs = [...baseArgs, ...cliArgs];
-  const reportPath = path.join(cwd, "pr-split-report.html");
+  const reportPath = path.join(cwd, OUTPUT_DIR, "pr-split-report.html");
 
   // Con --yes el CLI omite todos los prompts y usa los valores del plan.
   // No necesitamos construir stdin artificial.
@@ -319,7 +334,7 @@ export function patchPlanJson(
   branchNames: string[],
   commitMessages: string[]
 ): void {
-  const planPath = path.join(cwd, "pr-split-plan.json");
+  const planPath = path.join(cwd, OUTPUT_DIR, "pr-split-plan.json");
   if (!fs.existsSync(planPath)) { return; }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -348,7 +363,7 @@ export async function runScoreReport(cwd: string, baseBranch?: string): Promise<
   const { cmd, args: baseArgs } = await resolveCLICommand();
   const cliArgs = baseBranch ? ["score", "--base", baseBranch] : ["score"];
   const fullArgs = [...baseArgs, ...cliArgs];
-  const scoreReportPath = path.join(cwd, "pr-split-score.html");
+  const scoreReportPath = path.join(cwd, OUTPUT_DIR, "pr-split-score.html");
 
   // Borrar reporte anterior
   if (fs.existsSync(scoreReportPath)) {
@@ -419,7 +434,7 @@ export async function getChangedFilesCount(cwd: string): Promise<number> {
 export function getLastAnalysisInfo(
   cwd: string
 ): { score: number; date: string; branch: string } | null {
-  const planPath = path.join(cwd, "pr-split-plan.json");
+  const planPath = path.join(cwd, OUTPUT_DIR, "pr-split-plan.json");
   if (!fs.existsSync(planPath)) {
     return null;
   }

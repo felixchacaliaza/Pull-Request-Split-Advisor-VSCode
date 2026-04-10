@@ -9,6 +9,7 @@ export type AnalyzeConfig = {
   maxLinesPerCommitIdeal: number;
   idealLinesPerPR: number;
   targetScore: number;
+  useAi: boolean;
   metrics?: Record<string, { weight: number; scoring: Record<string, number | boolean>[] }>;
 };
 
@@ -116,6 +117,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         this._onApplyPlan();
       } else if (msg.command === "selectWorkspace") {
         this._onSelectWorkspace(msg.workspace as string);
+      } else if (msg.command === "checkCopilot") {
+        this._checkCopilot();
       }
     });
 
@@ -135,6 +138,20 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         this.onReady?.();
       }
     });
+  }
+
+  private async _checkCopilot(): Promise<void> {
+    try {
+      const models = await vscode.lm.selectChatModels({ vendor: "copilot" });
+      const available = models.length > 0;
+      this._view?.webview.postMessage({
+        command: "copilotStatus",
+        available,
+        label: available ? models[0].name : "",
+      });
+    } catch {
+      this._view?.webview.postMessage({ command: "copilotStatus", available: false, label: "" });
+    }
   }
 
   private _getHtml(_webview: vscode.Webview): string {
@@ -458,6 +475,65 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     cursor: pointer;
   }
   .btn-apply-plan:hover { background: var(--vscode-button-hoverBackground, #1177bb); }
+
+  /* ── AI switch ─────────────────────────────────────── */
+  .ai-section {
+    margin: 10px 0 6px;
+    padding: 8px 10px;
+    background: var(--vscode-sideBar-background, #252526);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    border-radius: 4px;
+  }
+  .ai-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .ai-label {
+    flex: 1;
+    font-size: var(--vscode-font-size);
+    font-weight: 600;
+    color: var(--vscode-foreground);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* Toggle switch */
+  .ai-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+  .ai-toggle input { opacity: 0; width: 0; height: 0; }
+  .ai-slider {
+    position: absolute; inset: 0;
+    background: var(--vscode-input-border, #555);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: background .2s;
+  }
+  .ai-slider::before {
+    content: '';
+    position: absolute;
+    height: 14px; width: 14px;
+    left: 3px; top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .2s;
+  }
+  .ai-toggle input:checked + .ai-slider { background: var(--vscode-button-background, #0e639c); }
+  .ai-toggle input:checked + .ai-slider::before { transform: translateX(16px); }
+  /* Badge */
+  .ai-badge {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .ai-badge.checking { display: flex; background: var(--vscode-badge-background, #4d4d4d); color: var(--vscode-badge-foreground, #ddd); }
+  .ai-badge.ok       { display: flex; background: #1e4620; color: #89d185; border: 1px solid #89d185; }
+  .ai-badge.error    { display: flex; background: #5a1d1d; color: #f98181; border: 1px solid #f98181; }
+  .ai-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
 </style>
 </head>
 <body>
@@ -615,6 +691,22 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 </div>
 
 <div id="validationError" class="error-msg" style="display:none"></div>
+
+<!-- ── Copilot AI ─────────────────────────────────────── -->
+<div class="ai-section">
+  <div class="ai-row">
+    <label class="ai-label">🤖 Usar Copilot IA</label>
+    <label class="ai-toggle">
+      <input type="checkbox" id="chkUseAi">
+      <span class="ai-slider"></span>
+    </label>
+    <span id="aiBadge" class="ai-badge">
+      <span class="ai-dot"></span>
+      <span id="aiBadgeText">Verificando…</span>
+    </span>
+  </div>
+</div>
+
 <hr>
 <button id="btnOpenReport" class="btn-open-report" style="display:none">📄 Abrir último reporte</button>
 <button id="btnScore" class="btn-open-report">📊 Ver score actual</button>
@@ -863,10 +955,50 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         maxLinesPerCommitIdeal: parseInt(document.getElementById('maxLinesPerCommitIdeal').value) || 120,
         idealLinesPerPR:        parseInt(document.getElementById('idealLinesPerPR').value)        || 99,
         targetScore:            target,
+        largeFileThreshold:     large,
+        mediumFileThreshold:    medium,
+        maxFilesPerCommit:      parseInt(document.getElementById('maxFilesPerCommit').value)      || 8,
+        maxLinesPerCommitIdeal: parseInt(document.getElementById('maxLinesPerCommitIdeal').value) || 120,
+        idealLinesPerPR:        parseInt(document.getElementById('idealLinesPerPR').value)        || 99,
+        targetScore:            target,
+        useAi:                  document.getElementById('chkUseAi').checked,
         metrics:                buildMetrics(),
       }
     });
   });
+
+  // ── Copilot AI switch ────────────────────────────────
+  (function () {
+    const chk   = document.getElementById('chkUseAi');
+    const badge = document.getElementById('aiBadge');
+    const text  = document.getElementById('aiBadgeText');
+
+    function setBadge(state, label) {
+      badge.className = 'ai-badge ' + state;
+      text.textContent = label;
+    }
+
+    chk.addEventListener('change', function () {
+      if (!this.checked) {
+        badge.className = 'ai-badge'; // hidden
+        return;
+      }
+      setBadge('checking', 'Verificando…');
+      vscode.postMessage({ command: 'checkCopilot' });
+    });
+
+    window.addEventListener('message', function (ev) {
+      const msg = ev.data;
+      if (msg.command !== 'copilotStatus') { return; }
+      if (msg.available) {
+        setBadge('ok', '● Conectado' + (msg.label ? ' · ' + msg.label : ''));
+      } else {
+        setBadge('error', '● No disponible');
+        document.getElementById('chkUseAi').checked = false;
+        badge.className = 'ai-badge';
+      }
+    });
+  }());
 
   // Estado inicial: métricas bloqueadas
   setMetricsState(false);
