@@ -25,8 +25,8 @@ export class ApplyPanel {
   private readonly _disposables: vscode.Disposable[] = [];
   private _resolve!: (result: ApplyFormResult | null) => void;
 
+  // B12 FIX: eliminado parámetro `extensionUri` que nunca se usaba.
   public static show(
-    extensionUri: vscode.Uri,
     summary: PlanSummary,
     cascadeWarning: boolean
   ): Promise<ApplyFormResult | null> {
@@ -44,7 +44,12 @@ export class ApplyPanel {
         "prSplitAdvisorApply",
         "PR Split Advisor — Aplicar plan",
         column,
-        { enableScripts: true, retainContextWhenHidden: true }
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          enableCommandUris: false,
+          localResourceRoots: [],
+        }
       );
 
       ApplyPanel.currentPanel = new ApplyPanel(panel, summary, cascadeWarning, resolve);
@@ -64,7 +69,12 @@ export class ApplyPanel {
     this._panel.webview.onDidReceiveMessage(
       (msg: { command: string; subtaskNumbers?: string[]; branchNames?: string[]; commitMessages?: string[]; pushBranches?: boolean }) => {
         if (msg.command === "apply") {
-          this._resolve({
+          // B13 FIX: anular _resolve tras el primer uso para que onDidDispose
+          // (que siempre se dispara después del dispose()) no llame al resolver
+          // por segunda vez con null.
+          const resolveOnce = this._resolve;
+          this._resolve = () => { /* no-op */ };
+          resolveOnce({
             subtaskNumbers:  msg.subtaskNumbers  ?? [],
             branchNames:     msg.branchNames     ?? [],
             commitMessages:  msg.commitMessages  ?? [],
@@ -72,7 +82,9 @@ export class ApplyPanel {
           });
           this._panel.dispose();
         } else if (msg.command === "cancel") {
-          this._resolve(null);
+          const resolveOnce = this._resolve;
+          this._resolve = () => { /* no-op */ };
+          resolveOnce(null);
           this._panel.dispose();
         }
       },
@@ -82,6 +94,8 @@ export class ApplyPanel {
 
     this._panel.onDidDispose(
       () => {
+        // Llamar _resolve(null) solo si no fue invocado ya desde el handler de mensaje.
+        // Si el usuario hizo click en Aplicar/Cancelar, _resolve ya es no-op aquí.
         this._resolve(null);
         ApplyPanel.currentPanel = undefined;
         this._disposables.forEach(d => d.dispose());
@@ -91,14 +105,26 @@ export class ApplyPanel {
     );
   }
 
+  private _getNonce(): string {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let nonce = "";
+    for (let i = 0; i < 32; i++) {
+      nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return nonce;
+  }
+
   private _getHtml(summary: PlanSummary, cascadeWarning: boolean): string {
     const newBranches = summary.branches.filter(b => !b.isExistingBaseBranch);
+    const nonce = this._getNonce();
 
     // Construir filas de commits para cada rama
     const branchesHtml = newBranches.map((branch, bi) => {
       const commitsHtml = branch.commitPlan.map((commit, ci) => {
-        // Extraer el número por defecto del mensaje (ej. FASTY-0001 → 0001)
-        const matchNum = commit.suggestedMessage.match(/-(\d{4})\s/);
+        // B7 FIX: usar \b (word boundary) en lugar de \s para que el match
+        // funcione también cuando el número de ticket está al final del mensaje.
+        // Antes: /-(\d{4})\s/ fallaba con "feat(x): subject TEAM-0001" (sin espacio al final).
+        const matchNum = commit.suggestedMessage.match(/-(\d{4})\b/);
         const defaultNum = matchNum ? matchNum[1] : "";
         const filesStr = commit.files.join(", ");
         return /* html */`
@@ -177,7 +203,7 @@ export class ApplyPanel {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';">
 <title>Aplicar plan</title>
 <style>
   body {
@@ -362,7 +388,7 @@ ${cascadeWarning ? "" : `
   <span class="hint">El campo vacío usará el número de ticket por defecto.</span>
 </div>
 
-<script>
+<script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
 
   document.getElementById('btnCancel').addEventListener('click', () => {

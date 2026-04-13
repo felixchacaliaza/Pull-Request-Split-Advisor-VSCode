@@ -17,6 +17,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "prSplitAdvisorView";
 
   private _view?: vscode.WebviewView;
+  private _selectedWorkspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+  private _suspendConfigRefresh = false;
+  // B6 FIX: rastrear el listener de configuración para reemplazarlo en cada
+  // llamada a resolveWebviewView y evitar la acumulación de listeners.
+  private _configChangeDisposable?: vscode.Disposable;
+  private _visibilityDisposable?: vscode.Disposable;
   private _onAnalyze: (config: AnalyzeConfig) => void;
   private _onOpenReport: () => void;
   private _onScoreReport: () => void;
@@ -86,27 +92,62 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  public setSelectedWorkspace(workspacePath: string): void {
+    if (this._selectedWorkspacePath === workspacePath) {
+      return;
+    }
+
+    this._selectedWorkspacePath = workspacePath;
+    if (this._view) {
+      this._view.webview.html = this._getHtml(this._view.webview);
+      this.onReady?.();
+    }
+  }
+
+  private _getConfigScopeUri(): vscode.Uri | undefined {
+    return this._selectedWorkspacePath ? vscode.Uri.file(this._selectedWorkspacePath) : undefined;
+  }
+
+  private _getConfigTarget(): vscode.ConfigurationTarget {
+    return vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 1
+      ? vscode.ConfigurationTarget.WorkspaceFolder
+      : vscode.ConfigurationTarget.Workspace;
+  }
+
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this._view = webviewView;
-    webviewView.webview.options = { enableScripts: true };
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [],
+    };
     webviewView.webview.html = this._getHtml(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage((msg) => {
+    webviewView.webview.onDidReceiveMessage(async (msg) => {
       if (msg.command === "analyze") {
         const cfg = msg.config as AnalyzeConfig;
-        const s = vscode.workspace.getConfiguration("prSplitAdvisor");
-        s.update("baseBranch",             cfg.baseBranch,             vscode.ConfigurationTarget.Global);
-        s.update("excludeLockfiles",       cfg.excludeLockfiles,       vscode.ConfigurationTarget.Global);
-        s.update("largeFileThreshold",     cfg.largeFileThreshold,     vscode.ConfigurationTarget.Global);
-        s.update("mediumFileThreshold",    cfg.mediumFileThreshold,    vscode.ConfigurationTarget.Global);
-        s.update("maxFilesPerCommit",      cfg.maxFilesPerCommit,      vscode.ConfigurationTarget.Global);
-        s.update("maxLinesPerCommitIdeal", cfg.maxLinesPerCommitIdeal, vscode.ConfigurationTarget.Global);
-        s.update("idealLinesPerPR",        cfg.idealLinesPerPR,        vscode.ConfigurationTarget.Global);
-        s.update("targetScore",            cfg.targetScore,            vscode.ConfigurationTarget.Global);
-        if (cfg.metrics) {
-          s.update("metricsOverride", cfg.metrics, vscode.ConfigurationTarget.Global);
-        } else {
-          s.update("metricsOverride", undefined, vscode.ConfigurationTarget.Global);
+        const s = vscode.workspace.getConfiguration("prSplitAdvisor", this._getConfigScopeUri());
+        const target = this._getConfigTarget();
+        this._suspendConfigRefresh = true;
+        try {
+          const updates: Thenable<void>[] = [
+            s.update("baseBranch",             cfg.baseBranch,             target),
+            s.update("excludeLockfiles",       cfg.excludeLockfiles,       target),
+            s.update("largeFileThreshold",     cfg.largeFileThreshold,     target),
+            s.update("mediumFileThreshold",    cfg.mediumFileThreshold,    target),
+            s.update("maxFilesPerCommit",      cfg.maxFilesPerCommit,      target),
+            s.update("maxLinesPerCommitIdeal", cfg.maxLinesPerCommitIdeal, target),
+            s.update("idealLinesPerPR",        cfg.idealLinesPerPR,        target),
+            s.update("targetScore",            cfg.targetScore,            target),
+            s.update("metricsOverride",        cfg.metrics ?? undefined,   target),
+          ];
+          await Promise.all(updates);
+        } finally {
+          this._suspendConfigRefresh = false;
+        }
+
+        if (this._view) {
+          this._view.webview.html = this._getHtml(this._view.webview);
+          this.onReady?.();
         }
         this._onAnalyze(cfg);
       } else if (msg.command === "openReport") {
@@ -116,14 +157,18 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       } else if (msg.command === "applyPlan") {
         this._onApplyPlan();
       } else if (msg.command === "selectWorkspace") {
-        this._onSelectWorkspace(msg.workspace as string);
+        const workspace = msg.workspace as string;
+        this.setSelectedWorkspace(workspace);
+        this._onSelectWorkspace(workspace);
       } else if (msg.command === "checkCopilot") {
         this._checkCopilot();
       }
     });
 
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("prSplitAdvisor") && this._view) {
+    // B6 FIX: descartar el listener anterior antes de crear uno nuevo.
+    this._configChangeDisposable?.dispose();
+    this._configChangeDisposable = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!this._suspendConfigRefresh && e.affectsConfiguration("prSplitAdvisor") && this._view) {
         this._view.webview.html = this._getHtml(this._view.webview);
         this.onReady?.();
       }
@@ -133,7 +178,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     this.onReady?.();
 
     // Re-notificar cuando la vista vuelva a ser visible
-    webviewView.onDidChangeVisibility(() => {
+    this._visibilityDisposable?.dispose();
+    this._visibilityDisposable = webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
         this.onReady?.();
       }
@@ -154,9 +200,25 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private _getNonce(): string {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let nonce = "";
+    for (let i = 0; i < 32; i++) {
+      nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return nonce;
+  }
+
   private _getHtml(_webview: vscode.Webview): string {
-    const cfg = vscode.workspace.getConfiguration("prSplitAdvisor");
-    const baseBranch          = cfg.get<string>("baseBranch", "master");
+    // B10 FIX: escapar valores de cadena antes de interpolarlos en HTML para
+    // prevenir XSS si un .vscode/settings.json malicioso define baseBranch
+    // con caracteres especiales como ">< o comillas dobles.
+    function escHtml(s: string): string {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    const cfg = vscode.workspace.getConfiguration("prSplitAdvisor", this._getConfigScopeUri());
+    const baseBranch          = escHtml(cfg.get<string>("baseBranch", "master"));
     const excludeLockfiles    = cfg.get<boolean>("excludeLockfiles", true);
     const largeFileThreshold  = cfg.get<number>("largeFileThreshold", 400);
     const mediumFileThreshold = cfg.get<number>("mediumFileThreshold", 180);
@@ -188,12 +250,13 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     const m14 = getMetric("M1.4", 0.25, [15, 20, 30, 40]);
     const m15 = getMetric("M1.5", 0.25, [100, 150, 250, 350]);
     const m32 = getMetric("M3.2", 0.30, [50, 300, 500, 1200]);
+    const nonce = this._getNonce();
 
     return /* html */ `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';">
 <style>
   body {
     font-family: var(--vscode-font-family);
@@ -713,7 +776,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 <button id="btnApplyPlan" class="btn-apply-plan" style="display:none">⚡ Aplicar plan</button>
 <button id="btnAnalyze">⟳ Analizar cambios</button>
 
-<script>
+<script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   let metricsUnlocked = false;
 
@@ -822,25 +885,30 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       case 'updateStatus': {
         const bar  = document.getElementById('statusBar');
         const btnA = document.getElementById('btnAnalyze');
+        const btnP = document.getElementById('btnApplyPlan');
         if (msg.status === 'idle') {
           bar.style.display = 'none';
           btnA.disabled = false;
+          if (btnP) { btnP.disabled = false; }
         } else if (msg.status === 'analyzing') {
           bar.className = 'status-bar status-analyzing';
           bar.style.display = 'block';
           bar.textContent = '⏳ ' + (msg.message || 'Analizando cambios...');
           btnA.disabled = true;
+          if (btnP) { btnP.disabled = true; }
         } else if (msg.status === 'done') {
           bar.className = 'status-bar status-done';
           bar.style.display = 'block';
           bar.textContent = '✅ ' + (msg.message || 'Análisis completado');
           btnA.disabled = false;
+          if (btnP) { btnP.disabled = false; }
           setTimeout(() => { bar.style.display = 'none'; }, 4000);
         } else if (msg.status === 'error') {
           bar.className = 'status-bar status-error';
           bar.style.display = 'block';
           bar.textContent = '❌ ' + (msg.message || 'Error en el análisis');
           btnA.disabled = false;
+          if (btnP) { btnP.disabled = false; }
         }
         break;
       }
@@ -949,12 +1017,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       config: {
         baseBranch,
         excludeLockfiles:       document.getElementById('excludeLockfiles').checked,
-        largeFileThreshold:     large,
-        mediumFileThreshold:    medium,
-        maxFilesPerCommit:      parseInt(document.getElementById('maxFilesPerCommit').value)      || 8,
-        maxLinesPerCommitIdeal: parseInt(document.getElementById('maxLinesPerCommitIdeal').value) || 120,
-        idealLinesPerPR:        parseInt(document.getElementById('idealLinesPerPR').value)        || 99,
-        targetScore:            target,
         largeFileThreshold:     large,
         mediumFileThreshold:    medium,
         maxFilesPerCommit:      parseInt(document.getElementById('maxFilesPerCommit').value)      || 8,

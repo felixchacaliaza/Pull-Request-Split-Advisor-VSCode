@@ -5,6 +5,18 @@ import * as fs from "fs";
 
 const execFileAsync = promisify(execFile);
 
+function resolveExecutable(command: string): string {
+  if (process.platform !== "win32") {
+    return command;
+  }
+
+  if (command === "npm" || command === "npx" || command === "pr-split-advisor") {
+    return `${command}.cmd`;
+  }
+
+  return command;
+}
+
 /**
  * Construye un entorno con PATH aumentado que incluye los directorios
  * donde npm instala binarios globalmente. Necesario porque VS Code lanza
@@ -48,20 +60,23 @@ async function resolveCLICommand(): Promise<{ cmd: string; args: string[] }> {
 
   // 1. Binario global instalado
   try {
-    await execFileAsync("pr-split-advisor", ["--version"], { shell: true, env });
-    return { cmd: "pr-split-advisor", args: [] };
+    const cmd = resolveExecutable("pr-split-advisor");
+    await execFileAsync(cmd, ["--version"], { env });
+    return { cmd, args: [] };
   } catch { /* continuar */ }
 
   // 2. npx — @latest garantiza siempre la versión más reciente
   try {
-    await execFileAsync("npx", ["--version"], { shell: true, env });
-    return { cmd: "npx", args: ["-y", "-p", "pull-request-split-advisor@latest", "pr-split-advisor"] };
+    const cmd = resolveExecutable("npx");
+    await execFileAsync(cmd, ["--version"], { env });
+    return { cmd, args: ["-y", "-p", "pull-request-split-advisor@latest", "pr-split-advisor"] };
   } catch { /* continuar */ }
 
   // 3. npm exec — @latest garantiza siempre la versión más reciente
   try {
-    await execFileAsync("npm", ["--version"], { shell: true, env });
-    return { cmd: "npm", args: ["exec", "--yes", "-p", "pull-request-split-advisor@latest", "--", "pr-split-advisor"] };
+    const cmd = resolveExecutable("npm");
+    await execFileAsync(cmd, ["--version"], { env });
+    return { cmd, args: ["exec", "--yes", "-p", "pull-request-split-advisor@latest", "--", "pr-split-advisor"] };
   } catch { /* continuar */ }
 
   throw new Error(
@@ -84,8 +99,7 @@ export async function ensureCLIInstalled(): Promise<void> {
  */
 export function updateCLIInBackground(): void {
   const env = buildEnv();
-  execFileAsync("npm", ["update", "-g", "pull-request-split-advisor"], {
-    shell: true,
+  execFileAsync(resolveExecutable("npm"), ["update", "-g", "pull-request-split-advisor"], {
     env,
   }).catch(() => { /* ignorar errores — permisos, sin red, etc. */ });
 }
@@ -93,23 +107,72 @@ export function updateCLIInBackground(): void {
 const CONFIG_FILENAME = "pr-split-advisor.config.json";
 const OUTPUT_DIR     = ".pr-split-advisor";
 
+function parseConfigFile(configPath: string, rawContent: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(rawContent);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("El contenido no es un objeto JSON válido.");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`No se pudo leer ${path.basename(configPath)}: ${message}`);
+  }
+}
+
+function replaceTicketNumber(text: string, subtaskNumber: string): string {
+  return text.replace(/\b([A-Za-z][A-Za-z0-9_]*-)\d+\b/g, `$1${subtaskNumber}`);
+}
+
+function normalizeSubtaskNumber(value?: string): string | undefined {
+  const normalized = value?.trim().replace(/[^0-9]/g, "");
+  return normalized ? normalized : undefined;
+}
+
 export async function runAnalysis(cwd: string, config?: Record<string, unknown>): Promise<{ reportPath: string; hasCascadeWarning: boolean }> {
   const configPath = path.join(cwd, CONFIG_FILENAME);
-  const configWritten = !!config;
+  const configPreExisted = fs.existsSync(configPath);
+  const originalConfigContent = configPreExisted
+    ? fs.readFileSync(configPath, "utf-8")
+    : undefined;
+  let wroteTempConfig = false;
+
   if (config) {
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    const { useAi, ...panelOverrides } = config;
+    const existingConfig = originalConfigContent
+      ? parseConfigFile(configPath, originalConfigContent)
+      : {};
+    const existingAi = existingConfig.ai;
+    const mergedConfig: Record<string, unknown> = {
+      ...existingConfig,
+      ...panelOverrides,
+    };
+
+    if (useAi) {
+      mergedConfig.ai = {
+        ...(existingAi && typeof existingAi === "object" && !Array.isArray(existingAi)
+          ? existingAi as Record<string, unknown>
+          : {}),
+        enabled: true,
+        provider: "copilot",
+      };
+    } else {
+      mergedConfig.ai = {
+        ...(existingAi && typeof existingAi === "object" && !Array.isArray(existingAi)
+          ? existingAi as Record<string, unknown>
+          : {}),
+        enabled: false,
+      };
+    }
+
+    fs.writeFileSync(configPath, JSON.stringify(mergedConfig, null, 2) + "\n", "utf-8");
+    wroteTempConfig = true;
   }
 
-  // Extraer baseBranch y useAi para pasarlos como flags al CLI
+  // Extraer baseBranch para pasarlo como flag al CLI
   const baseBranch = config?.baseBranch as string | undefined;
   const cliArgs: string[] = [];
   if (baseBranch) { cliArgs.push("--base", baseBranch); }
-
-  // Si useAi está activo, inyectarlo en el config JSON que escribe la extensión.
-  // El CLI leerá ai.provider = "copilot" desde pr-split-advisor.config.json.
-  if (config && (config.useAi as boolean)) {
-    (config as Record<string, unknown>).ai = { enabled: true, provider: "copilot" };
-  }
 
   // Borrar el reporte anterior para que no se muestre si el CLI falla
   const reportPath = path.join(cwd, OUTPUT_DIR, "pr-split-report.html");
@@ -127,16 +190,15 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
       const proc = spawn(cmd, fullArgs, {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
-        shell: true,
         env: buildEnv(),
       });
 
       proc.stdout?.on("data", (chunk: Buffer) => { stdoutOutput += chunk.toString(); });
       proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
 
-      // Respondemos "y" al posible prompt de cascada comprometida
-      // y "n" al prompt de apply (solo análisis, sin aplicar).
-      proc.stdin?.write("y\nn\n");
+      // B2 FIX: Responder "n" al prompt de apply para no aplicar desde el
+      // flujo de análisis. La cascada no tiene prompt interactivo desde v3.2.23.
+      proc.stdin?.write("n\n");
       proc.stdin?.end();
 
       proc.on("close", (code: number | null) => {
@@ -174,8 +236,12 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     }
     return { reportPath, hasCascadeWarning };
   } finally {
-    if (configWritten && fs.existsSync(configPath)) {
-      fs.unlinkSync(configPath);
+    if (wroteTempConfig) {
+      if (originalConfigContent !== undefined) {
+        fs.writeFileSync(configPath, originalConfigContent, "utf-8");
+      } else if (fs.existsSync(configPath)) {
+        fs.unlinkSync(configPath);
+      }
     }
   }
 }
@@ -260,7 +326,6 @@ export async function runApplyPlan(
   cwd: string,
   baseBranch?: string,
   onLog?: (line: string) => void,
-  subtaskNumbers?: string[],
   pushBranches?: boolean
 ): Promise<string> {
   const { cmd, args: baseArgs } = await resolveCLICommand();
@@ -282,7 +347,6 @@ export async function runApplyPlan(
     const proc = spawn(cmd, fullArgs, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: true,
       env: buildEnv(),
     });
 
@@ -305,8 +369,16 @@ export async function runApplyPlan(
     proc.stdin?.end();
 
     proc.on("close", (code: number | null) => {
-      if (code !== null && code <= 1) {
+      // B14 FIX: vaciar el buffer restante cuando el proceso cierra para que
+      // la última línea de output (sin \n final) llegue al output channel.
+      if (onLog && buffer.trim()) { onLog(buffer); buffer = ""; }
+
+      if (code !== null && code <= 1 && fs.existsSync(reportPath)) {
         resolve();
+      } else if (code !== null && code <= 1) {
+        reject(new Error(
+          "pr-split-advisor --apply finalizó sin generar .pr-split-advisor/pr-split-report.html."
+        ));
       } else {
         const detail = stderrOutput.trim() || stdoutOutput.trim();
         reject(new Error(detail || `pr-split-advisor --apply terminó con código ${code}.`));
@@ -327,12 +399,14 @@ export async function runApplyPlan(
  *
  * branchNames: uno por rama nueva (excluye isExistingBaseBranch), en orden.
  * commitMessages: plano, en orden rama0-commit0, rama0-commit1, rama1-commit0...
+ * subtaskNumbers: plano, en el mismo orden que commitMessages.
  * Si el array está vacío o un valor es cadena vacía, se deja el valor original.
  */
 export function patchPlanJson(
   cwd: string,
   branchNames: string[],
-  commitMessages: string[]
+  commitMessages: string[],
+  subtaskNumbers: string[]
 ): void {
   const planPath = path.join(cwd, OUTPUT_DIR, "pr-split-plan.json");
   if (!fs.existsSync(planPath)) { return; }
@@ -351,6 +425,16 @@ export function patchPlanJson(
     (branch.commitPlan ?? []).forEach((commit: any) => {
       const editedMsg = commitMessages[msgCursor]?.trim();
       if (editedMsg) { commit.suggestedMessage = editedMsg; }
+
+      const subtaskNumber = normalizeSubtaskNumber(subtaskNumbers[msgCursor]);
+      if (subtaskNumber) {
+        if (typeof commit.suggestedMessage === "string") {
+          commit.suggestedMessage = replaceTicketNumber(commit.suggestedMessage, subtaskNumber);
+        }
+        if (typeof commit.ticketCode === "string") {
+          commit.ticketCode = replaceTicketNumber(commit.ticketCode, subtaskNumber);
+        }
+      }
       msgCursor++;
     });
   });
@@ -375,11 +459,11 @@ export async function runScoreReport(cwd: string, baseBranch?: string): Promise<
     const proc = spawn(cmd, fullArgs, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: true,
       env: buildEnv(),
     });
 
-    proc.stdin?.write("y\nn\n");
+    // B9 FIX: el subcomando 'score' no tiene prompts interactivos desde v3.2;
+    // no es necesario escribir nada por stdin.
     proc.stdin?.end();
     proc.stderr?.on("data", (chunk: Buffer) => { stderrOutput += chunk.toString(); });
 
@@ -405,9 +489,8 @@ export async function runScoreReport(cwd: string, baseBranch?: string): Promise<
 /** Obtiene la rama git actual del workspace. */
 export async function getGitBranch(cwd: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", ["branch", "--show-current"], {
+    const { stdout } = await execFileAsync(resolveExecutable("git"), ["branch", "--show-current"], {
       cwd,
-      shell: true,
       env: buildEnv(),
     });
     return stdout.trim() || "desconocida";
@@ -419,9 +502,8 @@ export async function getGitBranch(cwd: string): Promise<string> {
 /** Cuenta archivos con cambios git (staged + unstaged). */
 export async function getChangedFilesCount(cwd: string): Promise<number> {
   try {
-    const { stdout } = await execFileAsync("git", ["status", "--porcelain"], {
+    const { stdout } = await execFileAsync(resolveExecutable("git"), ["status", "--porcelain"], {
       cwd,
-      shell: true,
       env: buildEnv(),
     });
     return stdout.trim().split("\n").filter((l) => l.trim().length > 0).length;
@@ -460,3 +542,9 @@ export function getLastAnalysisInfo(
     return null;
   }
 }
+
+export const __test__ = {
+  normalizeSubtaskNumber,
+  replaceTicketNumber,
+  resolveExecutable,
+};

@@ -54,6 +54,24 @@ export function activate(context: vscode.ExtensionContext) {
   let selectedWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   let provider!: SettingsViewProvider;
 
+  function getWorkspaceFolders(): readonly vscode.WorkspaceFolder[] {
+    return vscode.workspace.workspaceFolders ?? [];
+  }
+
+  function selectFallbackWorkspace(): string {
+    return getWorkspaceFolders()[0]?.uri.fsPath ?? "";
+  }
+
+  function ensureSelectedWorkspaceStillExists(): void {
+    const folders = getWorkspaceFolders();
+    const exists = folders.some((folder) => path.normalize(folder.uri.fsPath) === path.normalize(selectedWorkspace));
+
+    if (!exists) {
+      selectedWorkspace = selectFallbackWorkspace();
+      provider?.setSelectedWorkspace(selectedWorkspace);
+    }
+  }
+
   // Canal de salida para logs en tiempo real del CLI
   const outputChannel = vscode.window.createOutputChannel("PR Split Advisor");
   context.subscriptions.push(outputChannel);
@@ -74,9 +92,26 @@ export function activate(context: vscode.ExtensionContext) {
     context.workspaceState.update(cascadeWarningKey(), value);
   }
 
+  function getWorkspaceConfig(): vscode.WorkspaceConfiguration {
+    const scopeUri = selectedWorkspace ? vscode.Uri.file(selectedWorkspace) : undefined;
+    return vscode.workspace.getConfiguration("prSplitAdvisor", scopeUri);
+  }
+
   // ── Helpers internos ────────────────────────────────────────────────────
 
   async function initProviderState(): Promise<void> {
+    ensureSelectedWorkspaceStillExists();
+
+    const folders = getWorkspaceFolders();
+    if (folders.length > 1) {
+      provider.updateWorkspaces(
+        folders.map((f) => ({ name: path.basename(f.uri.fsPath), path: f.uri.fsPath })),
+        selectedWorkspace
+      );
+    } else {
+      provider.updateWorkspaces([], selectedWorkspace);
+    }
+
     if (!selectedWorkspace) { return; }
 
     const branch = await getGitBranch(selectedWorkspace);
@@ -99,13 +134,6 @@ export function activate(context: vscode.ExtensionContext) {
     // Mostrar el botón solo si hay plan Y el warning de cascada no está activo
     provider.notifyPlanExists(planExists && !getCascadeWarning());
 
-    const folders = vscode.workspace.workspaceFolders;
-    if (folders && folders.length > 1) {
-      provider.updateWorkspaces(
-        folders.map((f) => ({ name: path.basename(f.uri.fsPath), path: f.uri.fsPath })),
-        selectedWorkspace
-      );
-    }
   }
 
   async function runScoreFlow(): Promise<void> {
@@ -131,9 +159,7 @@ export function activate(context: vscode.ExtensionContext) {
 
           progress.report({ message: "Calculando score de la rama actual..." });
           ensureGitignore(selectedWorkspace);
-          const baseBranch = vscode.workspace
-            .getConfiguration("prSplitAdvisor")
-            .get<string>("baseBranch", "master");
+          const baseBranch = getWorkspaceConfig().get<string>("baseBranch", "master");
           const reportPath = await runScoreReport(selectedWorkspace, baseBranch);
 
           ReportPanel.createOrShow(context.extensionUri, reportPath);
@@ -166,6 +192,13 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
+    if (isApplying) {
+      vscode.window.showInformationMessage(
+        "PR Split Advisor: Ya hay una aplicación del plan en curso. Espera a que finalice."
+      );
+      return;
+    }
+
     const planPath = path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-plan.json");
     if (!fs.existsSync(planPath)) {
       vscode.window.showWarningMessage(
@@ -184,7 +217,6 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Abrir el formulario webview — espera a que el usuario confirme o cancele
     const result = await ApplyPanel.show(
-      context.extensionUri,
       summary,
       getCascadeWarning()
     );
@@ -211,13 +243,20 @@ export function activate(context: vscode.ExtensionContext) {
 
           isApplying = true;
           progress.report({ message: "Creando ramas y commits..." });
-          const baseBranch = vscode.workspace
-            .getConfiguration("prSplitAdvisor")
-            .get<string>("baseBranch", "master");
+          const baseBranch = getWorkspaceConfig().get<string>("baseBranch", "master");
 
           // Parchear el plan JSON con los nombres/mensajes editados por el usuario
-          if (result.branchNames.length > 0 || result.commitMessages.length > 0) {
-            patchPlanJson(selectedWorkspace, result.branchNames, result.commitMessages);
+          if (
+            result.branchNames.length > 0 ||
+            result.commitMessages.length > 0 ||
+            result.subtaskNumbers.some((value) => value.trim().length > 0)
+          ) {
+            patchPlanJson(
+              selectedWorkspace,
+              result.branchNames,
+              result.commitMessages,
+              result.subtaskNumbers
+            );
           }
 
           const newReportPath = await runApplyPlan(
@@ -228,7 +267,6 @@ export function activate(context: vscode.ExtensionContext) {
               const clean = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
               if (clean) { progress.report({ message: clean.slice(0, 80) }); }
             },
-            result.subtaskNumbers,
             result.pushBranches
           );
 
@@ -274,6 +312,26 @@ export function activate(context: vscode.ExtensionContext) {
           outputChannel.appendLine("");
           outputChannel.appendLine(`❌ Error: ${msg}`);
           provider.updateStatus("error", msg.split("\n")[0]);
+
+          const branch = await getGitBranch(selectedWorkspace);
+          provider.updateBranch(branch);
+
+          const reportExists = fs.existsSync(
+            path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-report.html")
+          );
+          provider.notifyReportExists(reportExists);
+
+          const planExists = fs.existsSync(
+            path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-plan.json")
+          );
+          provider.notifyPlanExists(planExists && !getCascadeWarning());
+
+          const lastAnalysis = getLastAnalysisInfo(selectedWorkspace);
+          provider.updateLastAnalysis(lastAnalysis);
+
+          const count = await getChangedFilesCount(selectedWorkspace);
+          provider.setBadge(count);
+
           vscode.window.showErrorMessage(`PR Split Advisor: ${msg}`);
         }
       }
@@ -363,13 +421,25 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewViewProvider(SettingsViewProvider.viewType, provider)
   );
 
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      ensureSelectedWorkspaceStillExists();
+      initProviderState();
+    })
+  );
+
   // ── Watcher de rama git (.git/HEAD) ──────────────────────────────────────
 
   const headWatcher = vscode.workspace.createFileSystemWatcher("**/.git/HEAD");
   context.subscriptions.push(headWatcher);
 
-  headWatcher.onDidChange(async () => {
+  headWatcher.onDidChange(async (uri) => {
     if (!selectedWorkspace) { return; }
+    const changedWorkspace = path.dirname(path.dirname(uri.fsPath));
+    if (path.normalize(changedWorkspace) !== path.normalize(selectedWorkspace)) {
+      return;
+    }
+
     // Ignorar cambios de HEAD mientras el apply está en ejecución:
     // el CLI hace git checkout por cada rama, lo que dispararía el watcher
     // múltiples veces y podría interferir con el reporte o el estado.
@@ -384,12 +454,10 @@ export function activate(context: vscode.ExtensionContext) {
     const count = await getChangedFilesCount(selectedWorkspace);
     provider.setBadge(count);
 
-    const autoAnalyze = vscode.workspace
-      .getConfiguration("prSplitAdvisor")
-      .get<boolean>("autoAnalyzeOnBranchChange", false);
+    const autoAnalyze = getWorkspaceConfig().get<boolean>("autoAnalyzeOnBranchChange", false);
 
     if (autoAnalyze) {
-      const cfg = vscode.workspace.getConfiguration("prSplitAdvisor");
+      const cfg = getWorkspaceConfig();
       const metricsOverride = cfg.get<MetricsOverride | null>("metricsOverride", null) ?? undefined;
       await runAnalysisFlow({
         baseBranch:             cfg.get<string>("baseBranch", "master"),
@@ -416,7 +484,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("prSplitAdvisor.analyze", () => {
-      const cfg = vscode.workspace.getConfiguration("prSplitAdvisor");
+      const cfg = getWorkspaceConfig();
       const metricsOverride = cfg.get<MetricsOverride | null>("metricsOverride", null) ?? undefined;
       runAnalysisFlow({
         baseBranch:             cfg.get<string>("baseBranch", "master"),
