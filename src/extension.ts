@@ -128,9 +128,13 @@ export function activate(context: vscode.ExtensionContext) {
     );
     provider.notifyReportExists(reportExists);
 
-    const planExists = fs.existsSync(
-      path.join(selectedWorkspace, ".pr-split-advisor", "pr-split-plan.json")
-    );
+    let planExists = false;
+    try {
+      planExists = getPlanSummary(selectedWorkspace) !== null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      provider.updateStatus("error", message.split("\n")[0]);
+    }
     // Mostrar el botón solo si hay plan Y el warning de cascada no está activo
     provider.notifyPlanExists(planExists && !getCascadeWarning());
 
@@ -207,7 +211,14 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    const summary = getPlanSummary(selectedWorkspace);
+    let summary;
+    try {
+      summary = getPlanSummary(selectedWorkspace);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`PR Split Advisor: ${message}`);
+      return;
+    }
     if (!summary) {
       vscode.window.showErrorMessage(
         "PR Split Advisor: No se pudo leer el plan. Ejecuta el análisis de nuevo."
@@ -251,12 +262,17 @@ export function activate(context: vscode.ExtensionContext) {
             result.commitMessages.length > 0 ||
             result.subtaskNumbers.some((value) => value.trim().length > 0)
           ) {
-            patchPlanJson(
-              selectedWorkspace,
-              result.branchNames,
-              result.commitMessages,
-              result.subtaskNumbers
-            );
+            try {
+              patchPlanJson(
+                selectedWorkspace,
+                result.branchNames,
+                result.commitMessages,
+                result.subtaskNumbers
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              throw new Error(`No se pudo preparar el plan para apply: ${message}`);
+            }
           }
 
           const newReportPath = await runApplyPlan(

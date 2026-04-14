@@ -124,6 +124,14 @@ La extensión usa y añade al `.gitignore` estas rutas cuando faltan:
 - `.advisor-history.json`
 - `pr-split-advisor.config.json`
 
+## Compatibilidad con el CLI
+
+La extensión trata `.pr-split-advisor/pr-split-plan.json` como contrato de integración estable.
+
+- Soporta el contrato legacy sin `contractVersion` y el contrato explícito `contractVersion: 2`.
+- Si detecta una versión de contrato más nueva, bloquea Apply y muestra un error claro para evitar operar sobre un esquema no soportado.
+- Para aprovechar la explicación estructurada por rama y el catálogo de métricas, usa CLI `pull-request-split-advisor` 3.2.34 o superior.
+
 ## Calidad y seguridad
 
 - Webviews con CSP y restricciones explícitas.

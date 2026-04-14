@@ -106,6 +106,71 @@ export function updateCLIInBackground(): void {
 
 const CONFIG_FILENAME = "pr-split-advisor.config.json";
 const OUTPUT_DIR     = ".pr-split-advisor";
+const LEGACY_PLAN_CONTRACT_VERSION = 1;
+const SUPPORTED_PLAN_CONTRACT_VERSIONS = new Set([1, 2]);
+
+type RawPlanFile = {
+  contractVersion?: unknown;
+  currentBranch?: string;
+  baseBranch?: string;
+  cascadeBlocked?: boolean;
+  branches?: Array<{
+    name?: string;
+    commits?: number;
+    lines?: number;
+    files?: number;
+    score?: number;
+    commitPlan?: Array<{
+      index?: number;
+      suggestedMessage?: string;
+      ticketCode?: string;
+      totalLines?: number;
+      files?: string[];
+    }>;
+    isExistingBaseBranch?: boolean;
+  }>;
+};
+
+function parsePlanFile(planPath: string, rawContent: string): RawPlanFile {
+  try {
+    const parsed = JSON.parse(rawContent);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("El contenido no es un objeto JSON válido.");
+    }
+    return parsed as RawPlanFile;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`No se pudo leer ${path.basename(planPath)}: ${message}`);
+  }
+}
+
+function resolvePlanContractVersion(planPath: string, rawPlan: RawPlanFile): number {
+  if (rawPlan.contractVersion === undefined) {
+    return LEGACY_PLAN_CONTRACT_VERSION;
+  }
+
+  if (!Number.isInteger(rawPlan.contractVersion) || Number(rawPlan.contractVersion) <= 0) {
+    throw new Error(
+      `${path.basename(planPath)} tiene un contractVersion inválido: ${JSON.stringify(rawPlan.contractVersion)}.`
+    );
+  }
+
+  return Number(rawPlan.contractVersion);
+}
+
+function readCompatiblePlanFile(planPath: string): RawPlanFile {
+  const rawPlan = parsePlanFile(planPath, fs.readFileSync(planPath, "utf-8"));
+  const contractVersion = resolvePlanContractVersion(planPath, rawPlan);
+
+  if (!SUPPORTED_PLAN_CONTRACT_VERSIONS.has(contractVersion)) {
+    throw new Error(
+      `La extensión no es compatible con contractVersion ${contractVersion} en ${path.basename(planPath)}. ` +
+      "Actualiza la extensión o usa una versión compatible del CLI. Versiones soportadas: 1 y 2."
+    );
+  }
+
+  return rawPlan;
+}
 
 function parseConfigFile(configPath: string, rawContent: string): Record<string, unknown> {
   try {
@@ -230,9 +295,12 @@ export async function runAnalysis(cwd: string, config?: Record<string, unknown>)
     const planPath = path.join(cwd, OUTPUT_DIR, "pr-split-plan.json");
     if (fs.existsSync(planPath)) {
       try {
-        const plan = JSON.parse(fs.readFileSync(planPath, "utf-8")) as { cascadeBlocked?: boolean };
+        const plan = readCompatiblePlanFile(planPath);
         hasCascadeWarning = plan.cascadeBlocked === true;
-      } catch { /* si falla la lectura, queda false */ }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`El plan generado no es compatible con esta extensión: ${message}`);
+      }
     }
     return { reportPath, hasCascadeWarning };
   } finally {
@@ -273,46 +341,25 @@ export type PlanSummary = {
 export function getPlanSummary(cwd: string): PlanSummary | null {
   const planPath = path.join(cwd, OUTPUT_DIR, "pr-split-plan.json");
   if (!fs.existsSync(planPath)) { return null; }
-  try {
-    const raw = JSON.parse(fs.readFileSync(planPath, "utf-8")) as {
-      currentBranch?: string;
-      baseBranch?: string;
-      branches?: Array<{
-        name?: string;
-        commits?: number;
-        lines?: number;
-        files?: number;
-        score?: number;
-        commitPlan?: Array<{
-          index?: number;
-          suggestedMessage?: string;
-          totalLines?: number;
-          files?: string[];
-        }>;
-        isExistingBaseBranch?: boolean;
-      }>;
-    };
-    return {
-      currentBranch: raw.currentBranch ?? "desconocida",
-      baseBranch:    raw.baseBranch    ?? "main",
-      branches: (raw.branches ?? []).map((b, i) => ({
-        name:                 b.name                 ?? `PR-${i + 1}`,
-        commits:              b.commits               ?? (b.commitPlan?.length ?? 0),
-        lines:                b.lines                 ?? 0,
-        files:                b.files                 ?? 0,
-        score:                b.score                 ?? 0,
-        isExistingBaseBranch: b.isExistingBaseBranch  ?? false,
-        commitPlan: (b.commitPlan ?? []).map((c, ci) => ({
-          index:            c.index            ?? ci + 1,
-          suggestedMessage: c.suggestedMessage ?? `commit ${ci + 1}`,
-          totalLines:       c.totalLines       ?? 0,
-          files:            c.files            ?? [],
-        })),
+  const raw = readCompatiblePlanFile(planPath);
+  return {
+    currentBranch: raw.currentBranch ?? "desconocida",
+    baseBranch:    raw.baseBranch    ?? "main",
+    branches: (raw.branches ?? []).map((b, i) => ({
+      name:                 b.name                 ?? `PR-${i + 1}`,
+      commits:              b.commits               ?? (b.commitPlan?.length ?? 0),
+      lines:                b.lines                 ?? 0,
+      files:                b.files                 ?? 0,
+      score:                b.score                 ?? 0,
+      isExistingBaseBranch: b.isExistingBaseBranch  ?? false,
+      commitPlan: (b.commitPlan ?? []).map((c, ci) => ({
+        index:            c.index            ?? ci + 1,
+        suggestedMessage: c.suggestedMessage ?? `commit ${ci + 1}`,
+        totalLines:       c.totalLines       ?? 0,
+        files:            c.files            ?? [],
       })),
-    };
-  } catch {
-    return null;
-  }
+    })),
+  };
 }
 
 /**
@@ -412,7 +459,7 @@ export function patchPlanJson(
   if (!fs.existsSync(planPath)) { return; }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw: any = JSON.parse(fs.readFileSync(planPath, "utf-8"));
+  const raw: any = readCompatiblePlanFile(planPath);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const newBranches: any[] = (raw.branches ?? []).filter((b: any) => !b.isExistingBaseBranch);
 
@@ -521,10 +568,7 @@ export function getLastAnalysisInfo(
     return null;
   }
   try {
-    const plan = JSON.parse(fs.readFileSync(planPath, "utf-8")) as {
-      currentBranch?: string;
-      branches?: Array<{ score?: number }>;
-    };
+    const plan = readCompatiblePlanFile(planPath);
     const branches = plan.branches ?? [];
     if (branches.length === 0) {
       return null;
@@ -547,4 +591,5 @@ export const __test__ = {
   normalizeSubtaskNumber,
   replaceTicketNumber,
   resolveExecutable,
+  resolvePlanContractVersion,
 };

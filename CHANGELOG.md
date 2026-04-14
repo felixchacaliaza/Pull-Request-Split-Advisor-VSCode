@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.4
+
+- Fija compatibilidad explícita con el contrato del plan JSON del CLI.
+- Acepta el contrato legacy y `contractVersion: 2`, y bloquea Apply si llega una versión no soportada.
+- Mejora el feedback al usuario cuando el plan generado no es compatible con la versión instalada de la extensión.
+
 ## 0.4.3
 
 - Corrige restauración de configuración temporal del CLI sin destruir configuración del usuario.
